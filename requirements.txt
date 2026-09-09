@@ -1,0 +1,5 @@
+# Add dependencies as you actually need them, not in advance.
+# Pin exact versions (pip freeze) once week 1 works and before you deploy.
+
+fastapi
+uvicorn[standard]
