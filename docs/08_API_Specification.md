@@ -23,8 +23,8 @@ Returns structured findings for a review.
 ### GET /eval-report
 Returns the latest evaluation harness result (recall, false-positive rate, sample size).
 
-### GET /cost-report
-Returns cost-per-review and cumulative spend.
+### GET /quota-report
+Returns requests-per-review and cumulative free-tier quota consumption, broken down by provider.
 
 ## Standard Errors
 ```json

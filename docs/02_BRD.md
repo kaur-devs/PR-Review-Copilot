@@ -50,12 +50,12 @@ Build a transparent, installable AI reviewer that understands what a change actu
 - Performance: a typical PR (≤8 files) should receive comments within roughly a minute.
 - Reliability: transient LLM/API failures should not silently drop a review.
 - Auditability: every posted finding retains its model, prompt-template, and confidence metadata.
-- Cost: prefer the cheapest capable model per pipeline step; track dollars-per-review from week 1.
+- Cost: zero paid API spend — free-tier providers only; track API requests per review from week 1, since request quota is the binding constraint.
 
 ## 9. Success Metrics
 - Recall against a curated set of real historical PR bugs.
 - False-positive rate against the same set.
-- Cost per PR review.
+- API requests consumed per PR review.
 - Judge-pass grounding accuracy (how often the judge correctly discards a bad finding).
 - Qualitative: would these findings have been worth a human reviewer's time (installed on the builder's own repos).
 
@@ -64,7 +64,7 @@ Build a transparent, installable AI reviewer that understands what a change actu
 |---|---|---|---|
 | False-positive fatigue | Medium | High | Judge pass + confidence filtering built into v1, not deferred |
 | Hard to source real-world test data | Medium | Medium | Use open-source repos with documented bugfix-commit history instead of private team data |
-| LLM API cost scales with PR volume | Low | Medium | Review only changed hunks + targeted context; Haiku/Sonnet split; cost tracked per review |
+| Free-tier request quota exhausted during eval tuning | Medium | Medium | Batch classifier and judge calls to cut ~20 API calls per review down to ~7; spread stages across multiple providers; track requests per review from week 1 |
 | Hosting cold-starts delay first review after inactivity | Medium | Low | Accepted tradeoff on free-tier hosting; documented, not hidden |
 | Scope creep toward autofix/multi-platform/security scanning | Medium | Medium | Explicitly deferred to Version 3 with reasons documented |
 

@@ -15,7 +15,7 @@
 ## Technical Questions
 1. Why FastAPI?
 2. Why a GitHub App instead of a personal access token?
-3. Why split Haiku and Sonnet across pipeline stages?
+3. How does the provider adapter let you swap free-tier LLM providers without rearchitecting?
 4. Why Postgres over a document store here?
 5. Why no agent framework?
 6. How is the webhook verified?
@@ -27,7 +27,7 @@
 12. How do you validate structured LLM output?
 13. How do you test the review pipeline?
 14. How do you handle LLM API failure?
-15. How do you monitor cost per review?
+15. How do you monitor free-tier request-quota consumption per review?
 16. How do you secure the GitHub App's permissions?
 17. Why not use RAG?
 18. When would a queue become necessary?
@@ -42,7 +42,7 @@
 5. How would you detect the reviewer's own quality regressing over time?
 6. How would you isolate one installation's data from another's?
 7. How would you handle a compromised/malicious PR trying prompt injection?
-8. How would you reduce cost at 10x current PR volume?
+8. How would you stay inside free-tier request quotas at 10x current PR volume?
 9. How would you audit every posted finding after the fact?
 10. How would you evolve this from a student project into a real product?
 
@@ -55,7 +55,7 @@
 6. A team dismisses every finding in one category. What should happen (v2)?
 7. The hosting service is cold and a webhook arrives. What happens to that PR?
 8. The same PR triggers two webhook deliveries. What happens?
-9. Cost per review suddenly triples. What do you check first?
+9. Requests per review suddenly triples. What do you check first?
 10. A stakeholder wants the bot to auto-merge clean PRs. What has to change before that's reasonable?
 
 ## Strong Answer Principle

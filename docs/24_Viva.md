@@ -33,7 +33,7 @@
 8. Why is the pipeline synchronous rather than queued at this scale?
 9. How would you add a lightweight dashboard?
 10. How do you test the webhook endpoint?
-11. How do you track cost per review?
+11. How do you track free-tier request-quota consumption per review?
 12. How do you handle a failed pipeline stage?
 13. Why not use LangChain or a similar framework?
 14. What's the difference between HLD and LLD here?
@@ -52,7 +52,7 @@
 5. How would you handle an adversarial PR designed to defeat the reviewer?
 6. How would you make the review pipeline explainable to a non-technical stakeholder?
 7. How would you design a model/prompt registry with rollback?
-8. How would you estimate cost at 1,000x current PR volume?
+8. What breaks first if PR volume grows 1,000x on free-tier quotas, and what would you change?
 9. How would you design a resilient pipeline if GitHub's API degrades?
 10. How would you evaluate human-AI agreement over the feedback loop?
 11. How would you decide when targeted search is no longer sufficient and a full code graph is needed?

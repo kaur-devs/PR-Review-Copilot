@@ -17,7 +17,7 @@ flowchart LR
     CP[Comment Poster]
     OT[Outcome Tracker]
     DB[(Postgres)]
-    LLM[Claude API]
+    LLM[LLM Provider API]
 
     U --> GH
     GH --> WH

@@ -18,7 +18,7 @@ pr-review-copilot/
 │   ├── 13_CICD.md
 │   ├── 14_Observability.md
 │   ├── 15_Deployment.md
-│   ├── 16_Cost_Analysis.md
+│   ├── 16_Quota_Analysis.md
 │   ├── 17_Roadmap.md
 │   ├── 18_Team_Responsibilities.md
 │   ├── 19_GitHub_Structure.md

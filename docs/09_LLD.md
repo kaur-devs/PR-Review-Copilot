@@ -50,7 +50,7 @@ sequenceDiagram
     participant GH as GitHub
     participant API as FastAPI
     participant CTX as Context Gatherer
-    participant LLM as Claude API
+    participant LLM as LLM Provider
     participant DB as Postgres
 
     D->>GH: Open/update PR
@@ -58,9 +58,9 @@ sequenceDiagram
     API->>API: Verify signature
     API->>GH: Fetch diff
     API->>CTX: Gather connected-file context
-    API->>LLM: Classify + generate findings (Sonnet)
+    API->>LLM: Classify (batched) + generate findings
     LLM-->>API: Structured findings
-    API->>LLM: Judge pass (Haiku)
+    API->>LLM: Judge pass (batched)
     LLM-->>API: Verified findings
     API->>API: Confidence/dedup filter
     API->>GH: Post review comments
@@ -69,7 +69,7 @@ sequenceDiagram
 ```
 
 ## Design Patterns
-- Adapter pattern for LLM provider abstraction (Claude today, swappable later).
+- Adapter pattern for LLM provider abstraction — mandatory, not optional. Multiple free-tier providers are trialled, and different pipeline stages may run on different providers to spread request quota.
 - Strategy pattern for per-change-type review templates.
 - Repository pattern for Postgres persistence boundaries.
 - Do not introduce patterns without a concrete need — this is a fixed pipeline, not an open-ended agent loop, so no agent-framework abstraction is used.

@@ -7,7 +7,7 @@
 - **Team:** 1 student
 - **Skill level:** Intermediate to Advanced
 - **Primary users:** Engineering teams (2-15 developers), individual developers reviewing their own repos
-- **Constraint:** No local GPU — orchestration-only, hosted LLM APIs
+- **Constraint:** No local GPU and no paid-API budget — orchestration-only, free-tier hosted LLM APIs
 
 ## Executive Summary
 PR Review Copilot is an end-to-end AI code review system that reads a pull request's diff, gathers the surrounding code context it actually touches, generates targeted findings, verifies each finding against the real code before it's shown to anyone, and posts the result as real GitHub review comments.

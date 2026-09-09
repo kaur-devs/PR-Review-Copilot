@@ -11,7 +11,7 @@ GitHub App permissions, scoped to minimum necessary:
 
 ## Data Protection
 - No PR source code stored beyond what's needed for the specific review (findings/rationale, not full file contents).
-- Secrets (GitHub App private key, Claude API key) kept in environment/secret management, never committed.
+- Secrets (GitHub App private key, LLM provider API keys) kept in environment/secret management, never committed.
 - HTTPS for all external calls.
 
 ## Webhook Security

@@ -51,4 +51,4 @@ A distinction-level project should demonstrate:
 - Deployment.
 - Observability.
 - Clear, documented trade-offs (no RAG, no autofix, no multi-platform in v1 — and why).
-- Measurable outcomes (cost per review, recall, false-positive rate).
+- Measurable outcomes (recall, false-positive rate, requests per review).

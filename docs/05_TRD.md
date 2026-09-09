@@ -3,7 +3,7 @@
 ## Proposed Architecture
 - **Backend:** Python + FastAPI
 - **GitHub integration:** GitHub App (webhooks + REST API), scoped permissions
-- **LLM:** Claude Haiku 4.5 (classification, judge pass) + Claude Sonnet (review generation)
+- **LLM:** Free-tier hosted providers (Gemini / GitHub Models / Groq / Cerebras / Mistral), reached through a provider-agnostic adapter
 - **Diff parsing:** `unidiff`
 - **Database:** PostgreSQL (Supabase free tier)
 - **Hosting:** Render (free tier)
@@ -16,8 +16,8 @@ Async-friendly, well-suited to a webhook-driven service, and matches existing Py
 ### GitHub App (not OAuth App or PAT)
 Scoped, installable, per-installation permissions — the correct primitive for a product other repos install, unlike a personal-account-tied PAT.
 
-### Claude Haiku + Sonnet split
-Cost-driven architectural decision: mechanical steps (classification, grounding verification) run on the cheap model; the one step needing real judgment (review generation) runs on the stronger model.
+### Free-tier LLM providers behind an adapter
+Budget-driven architectural decision: the project has no paid-API budget, so all inference runs on free-tier hosted providers. Because free tiers differ in rate limits, structured-output support, and context window, the provider is reached exclusively through an adapter that abstracts authentication, structured JSON generation, token-usage reporting, and rate-limit/retry semantics. Different pipeline stages may run on different providers to spread request quota across accounts.
 
 ### PostgreSQL over a document store
 The findings/outcomes/suppression data is relational by nature (foreign keys between reviews, findings, and outcomes) — a structured schema fits better than a flexible document model here.

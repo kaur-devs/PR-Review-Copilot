@@ -5,8 +5,8 @@
 **Duration:** 8 weeks
 **Team:** 1 student
 **Level:** Intermediate to Advanced
-**Stack:** Python + FastAPI + PostgreSQL + GitHub App API + Claude API (Haiku + Sonnet)
-**Constraint:** No local/dedicated GPU (laptop-only development; all inference via hosted LLM APIs)
+**Stack:** Python + FastAPI + PostgreSQL + GitHub App API + free-tier LLM provider APIs (provider-agnostic adapter)
+**Constraint:** No local/dedicated GPU and no paid-API budget (laptop-only development; all inference via free-tier hosted LLM APIs)
 
 ## Project Description
 Designing and implementing an AI-powered pull request reviewer, delivered as an installable GitHub App, for engineering teams who merge code without dedicated senior review capacity on every PR. The system reads a diff, understands what it actually touches beyond the changed lines, verifies its own findings before posting, and applies software engineering, AI/LLM orchestration, evaluation, testing, deployment, and documentation best practices throughout.
@@ -20,7 +20,7 @@ Designing and implementing an AI-powered pull request reviewer, delivered as an 
 - **Team:** 1 student
 - **Skill level:** Intermediate to Advanced
 - **Primary users:** Engineering teams (2-15 developers), individual developers reviewing their own repos
-- **Constraint:** No local GPU — orchestration-only, hosted LLM APIs
+- **Constraint:** No local GPU and no paid-API budget — orchestration-only, free-tier hosted LLM APIs
 
 ## Executive Summary
 PR Review Copilot is an end-to-end AI code review system that reads a pull request's diff, gathers the surrounding code context it actually touches, generates targeted findings, verifies each finding against the real code before it's shown to anyone, and posts the result as real GitHub review comments.
@@ -103,12 +103,12 @@ Build a transparent, installable AI reviewer that understands what a change actu
 - Performance: a typical PR (≤8 files) should receive comments within roughly a minute.
 - Reliability: transient LLM/API failures should not silently drop a review.
 - Auditability: every posted finding retains its model, prompt-template, and confidence metadata.
-- Cost: prefer the cheapest capable model per pipeline step; track dollars-per-review from week 1.
+- Cost: zero paid API spend — free-tier providers only; track API requests per review from week 1, since request quota is the binding constraint.
 
 ## 9. Success Metrics
 - Recall against a curated set of real historical PR bugs.
 - False-positive rate against the same set.
-- Cost per PR review.
+- API requests consumed per PR review.
 - Judge-pass grounding accuracy (how often the judge correctly discards a bad finding).
 - Qualitative: would these findings have been worth a human reviewer's time (installed on the builder's own repos).
 
@@ -117,7 +117,7 @@ Build a transparent, installable AI reviewer that understands what a change actu
 |---|---|---|---|
 | False-positive fatigue | Medium | High | Judge pass + confidence filtering built into v1, not deferred |
 | Hard to source real-world test data | Medium | Medium | Use open-source repos with documented bugfix-commit history instead of private team data |
-| LLM API cost scales with PR volume | Low | Medium | Review only changed hunks + targeted context; Haiku/Sonnet split; cost tracked per review |
+| Free-tier request quota exhausted during eval tuning | Medium | Medium | Batch classifier and judge calls to cut ~20 API calls per review down to ~7; spread stages across multiple providers; track requests per review from week 1 |
 | Hosting cold-starts delay first review after inactivity | Medium | Low | Accepted tradeoff on free-tier hosting; documented, not hidden |
 | Scope creep toward autofix/multi-platform/security scanning | Medium | Medium | Explicitly deferred to Version 3 with reasons documented |
 
@@ -211,7 +211,7 @@ The primary interface is **GitHub itself** — there is no separate frontend in 
 ## Information Architecture
 1. GitHub PR page (primary surface — inline review comments)
 2. GitHub App installation/settings page (GitHub-hosted)
-3. *(Optional, v2+)* Lightweight web dashboard — installed repos, recent reviews, cost report, eval results
+3. *(Optional, v2+)* Lightweight web dashboard — installed repos, recent reviews, quota report, eval results
 
 ## Primary User Flow
 Install app on repo → open/update PR → wait ~1 minute → review appears as inline comments, severity-gated → resolve or dismiss each comment → *(v2)* dashboard shows suppression behavior building up per repo.
@@ -226,7 +226,7 @@ Install app on repo → open/update PR → wait ~1 minute → review appears as 
 ### Optional Dashboard (v2+)
 - List of installed repos.
 - Recent reviews with severity breakdown.
-- Cost-per-review and cumulative cost.
+- Requests-per-review and cumulative quota consumption.
 - Eval report (recall / false-positive rate) from the latest harness run.
 
 ## States
@@ -242,7 +242,7 @@ Every asynchronous step (webhook received, processing, posted, failed) should be
 ## Proposed Architecture
 - **Backend:** Python + FastAPI
 - **GitHub integration:** GitHub App (webhooks + REST API), scoped permissions
-- **LLM:** Claude Haiku 4.5 (classification, judge pass) + Claude Sonnet (review generation)
+- **LLM:** Free-tier hosted providers (Gemini / GitHub Models / Groq / Cerebras / Mistral), reached through a provider-agnostic adapter
 - **Diff parsing:** `unidiff`
 - **Database:** PostgreSQL (Supabase free tier)
 - **Hosting:** Render (free tier)
@@ -255,8 +255,8 @@ Async-friendly, well-suited to a webhook-driven service, and matches existing Py
 ### GitHub App (not OAuth App or PAT)
 Scoped, installable, per-installation permissions — the correct primitive for a product other repos install, unlike a personal-account-tied PAT.
 
-### Claude Haiku + Sonnet split
-Cost-driven architectural decision: mechanical steps (classification, grounding verification) run on the cheap model; the one step needing real judgment (review generation) runs on the stronger model.
+### Free-tier LLM providers behind an adapter
+Budget-driven architectural decision: the project has no paid-API budget, so all inference runs on free-tier hosted providers. Because free tiers differ in rate limits, structured-output support, and context window, the provider is reached exclusively through an adapter that abstracts authentication, structured JSON generation, token-usage reporting, and rate-limit/retry semantics. Different pipeline stages may run on different providers to spread request quota across accounts.
 
 ### PostgreSQL over a document store
 The findings/outcomes/suppression data is relational by nature (foreign keys between reviews, findings, and outcomes) — a structured schema fits better than a flexible document model here.
@@ -304,7 +304,7 @@ flowchart LR
     CP[Comment Poster]
     OT[Outcome Tracker]
     DB[(Postgres)]
-    LLM[Claude API]
+    LLM[LLM Provider API]
 
     U --> GH
     GH --> WH
@@ -463,8 +463,8 @@ Returns structured findings for a review.
 ### GET /eval-report
 Returns the latest evaluation harness result (recall, false-positive rate, sample size).
 
-### GET /cost-report
-Returns cost-per-review and cumulative spend.
+### GET /quota-report
+Returns requests-per-review and cumulative free-tier quota consumption, broken down by provider.
 
 ## Standard Errors
 ```json
@@ -532,7 +532,7 @@ sequenceDiagram
     participant GH as GitHub
     participant API as FastAPI
     participant CTX as Context Gatherer
-    participant LLM as Claude API
+    participant LLM as LLM Provider
     participant DB as Postgres
 
     D->>GH: Open/update PR
@@ -540,9 +540,9 @@ sequenceDiagram
     API->>API: Verify signature
     API->>GH: Fetch diff
     API->>CTX: Gather connected-file context
-    API->>LLM: Classify + generate findings (Sonnet)
+    API->>LLM: Classify (batched) + generate findings
     LLM-->>API: Structured findings
-    API->>LLM: Judge pass (Haiku)
+    API->>LLM: Judge pass (batched)
     LLM-->>API: Verified findings
     API->>API: Confidence/dedup filter
     API->>GH: Post review comments
@@ -551,7 +551,7 @@ sequenceDiagram
 ```
 
 ## Design Patterns
-- Adapter pattern for LLM provider abstraction (Claude today, swappable later).
+- Adapter pattern for LLM provider abstraction — mandatory, not optional. Multiple free-tier providers are trialled, and different pipeline stages may run on different providers to spread request quota.
 - Strategy pattern for per-change-type review templates.
 - Repository pattern for Postgres persistence boundaries.
 - Do not introduce patterns without a concrete need — this is a fixed pipeline, not an open-ended agent loop, so no agent-framework abstraction is used.
@@ -629,7 +629,7 @@ Measure:
 - Recall (known bugs caught / total known bugs).
 - False-positive rate (dismissed findings / total findings posted).
 - Judge-pass grounding accuracy.
-- Cost per review.
+- API requests consumed per review.
 - Latency per review.
 - Calibrated against independent competitor benchmarks (Qodo 60.1% F1, CodeRabbit 51.2% F1, Greptile's self-reported 82% bug-catch rate) — not expected to match a funded team's numbers, but measured with the same rigor.
 
@@ -650,7 +650,7 @@ GitHub App permissions, scoped to minimum necessary:
 
 ## Data Protection
 - No PR source code stored beyond what's needed for the specific review (findings/rationale, not full file contents).
-- Secrets (GitHub App private key, Claude API key) kept in environment/secret management, never committed.
+- Secrets (GitHub App private key, LLM provider API keys) kept in environment/secret management, never committed.
 - HTTPS for all external calls.
 
 ## Webhook Security
@@ -744,7 +744,7 @@ Log:
 - Repo ID, PR number
 - Review ID
 - Processing stage
-- Model version (Haiku/Sonnet) and prompt-template version
+- LLM provider, model version, and prompt-template version
 - Error code
 
 Do not log full PR source code or diffs beyond what's necessary to debug a specific failure.
@@ -753,7 +753,7 @@ Do not log full PR source code or diffs beyond what's necessary to debug a speci
 - Webhook receipt rate and processing latency
 - Review success/failure rate
 - LLM latency (per stage)
-- Token usage and cost per review
+- Token usage and request-quota consumption per review
 - Judge-pass rejection rate
 - False-positive rate trend (from accepted/rejected outcomes)
 
@@ -765,7 +765,7 @@ Trigger alerts for:
 - Repeated processing failures.
 - GitHub API errors (rate limit, auth failure).
 - LLM dependency failure.
-- Abnormal cost spike per review.
+- Abnormal request-count spike per review, or approaching a provider's daily quota.
 
 
 # Deployment Architecture
@@ -777,14 +777,14 @@ Development → Staging (test repo) → Production/Demo
 - FastAPI backend as a container/service on Render.
 - PostgreSQL via Supabase (free tier).
 - GitHub App registered against the deployed backend's public webhook URL.
-- Claude API accessed via hosted endpoint — no local model hosting.
+- LLM inference via free-tier hosted provider endpoints — no local model hosting, no paid API tier.
 
 ## No-GPU Constraint
 Because no local/dedicated GPU is available:
-1. All inference runs through hosted LLM APIs (Claude).
+1. All inference runs through free-tier hosted LLM APIs.
 2. No local model fine-tuning or training is attempted.
 3. Model access is kept provider-agnostic via an adapter, so a different hosted provider could be substituted without rearchitecting.
-4. Cost and latency are tracked explicitly since API-based inference is the only path (§Cost Analysis).
+4. Request-quota consumption and latency are tracked explicitly, since free-tier rate limits are the binding constraint (§Quota & Resource Analysis).
 
 ## Rollback
 Backend deployments are versioned; a broken deploy rolls back to the last known-good container image.
@@ -793,34 +793,55 @@ Backend deployments are versioned; a broken deploy rolls back to the last known-
 Schema changes tracked with explicit migration scripts (e.g., Alembic) rather than ad hoc changes.
 
 
-# Cost Analysis
+# Quota & Resource Analysis
 
-## Cost Model
-Estimate cost from:
-- PRs reviewed per period
-- Files reviewed per PR (typically ~5)
-- Tokens per file (diff + connected context)
-- Classifier calls (Haiku)
-- Review generation calls (Sonnet)
-- Judge-pass calls (Haiku)
-- Hosting (Render free tier)
-- Database (Supabase free tier)
+The project runs entirely on free-tier infrastructure and free-tier LLM APIs, so **direct monetary cost is $0**. That does not make the project unconstrained — it moves the constraint from dollars to **API requests per day**. This document models that constraint the way a cost model would model spend.
+
+## Why requests, not tokens
+Paid APIs meter per token, so the optimization target is fewer tokens — especially output tokens. Free tiers meter per *request*, with caps on requests per minute and per day. The optimization target is therefore **fewer API calls per review**, which is a different design decision and drives ADR-006.
+
+## Request Model
+Requests per review depend on:
+- Files changed per PR (typically ~5, after skipping binaries, lockfiles, and generated code)
+- Whether classifier calls are batched (1 call) or per-file (N calls)
+- Whether judge calls are batched per file (N calls) or issued per finding (often 2N)
+- Retries caused by schema-invalid LLM output
 
 ## Formula
-`Cost per PR ≈ Σ (calls × avg input tokens × input price + calls × avg output tokens × output price)` across classifier, review-generation, and judge-pass stages.
+`Requests per PR ≈ classifier calls + generation calls (1 per file) + judge calls + retries`
 
-## Actual Estimates (current pricing, per PR ~5 files)
-- Claude Haiku 4.5: $1 / $5 per million input/output tokens.
-- Claude Sonnet: $2 / $10 per million input/output tokens.
-- **Estimated cost per PR review: $0.03–$0.08**, depending on model split and PR size.
-- **Estimated total build cost across the 8-week project (development, debugging, eval harness runs): $30–$70**, entirely LLM API usage.
-- Hosting (Render free tier) and database (Supabase free tier): **$0**, with documented tradeoffs (cold starts, auto-pause after inactivity).
+`Requests per eval run ≈ requests per PR × number of curated PRs`
+
+## Estimates (per PR, ~5 files, ~10 raw findings)
+
+| Stage | Naive | Batched (ADR-006) |
+|---|---:|---:|
+| Classify | 5 | 1 |
+| Generate | 5 | 5 |
+| Judge | 10 | 1–5 |
+| **Total per review** | **~20** | **~7** |
+| **Total per 40-PR eval run** | **~800** | **~280** |
+
+The eval run figure is the number that matters. Weeks 6–7 involve re-running the harness after every prompt or threshold change, so requests-per-run directly determines how many tuning iterations are possible before the deadline.
+
+## Infrastructure
+| Component | Cost | Real constraint |
+|---|---|---|
+| LLM inference | $0 | Free-tier requests/minute and requests/day |
+| Hosting (Render free tier) | $0 | Spins down after ~15 min idle; cold start ~50s, which consumes most of the ~60s review NFR |
+| Database (Supabase free tier) | $0 | Pauses after ~7 days of inactivity and needs a manual wake — a demo-day risk |
+| GitHub API | $0 | ~5,000 requests/hour per installation; connected-file code search is the endpoint most likely to approach it |
 
 ## Optimization
-- Review only changed hunks + targeted connected files, never full files.
-- Use the cheaper model (Haiku) for classification and judging; reserve the stronger model (Sonnet) for review generation only.
+- Batch classifier and judge calls (ADR-006) — the single largest lever on quota.
+- Review only changed hunks + targeted connected files, never full files; cap connected-file context per file so one widely-referenced symbol cannot balloon a request.
 - Skip binary files, lockfiles, and generated code entirely.
-- Track cost per review from week 1, not retroactively.
+- Cap files reviewed per PR so a single large PR cannot exhaust a daily quota.
+- Spread pipeline stages across two providers where quota is tight — the provider adapter (ADR-003) makes this configuration, not code.
+- Reject providers that fail the structured-output validity gate; malformed JSON forces retries, and retries are wasted quota.
+
+## Instrumentation
+Every provider response carries token usage. Log per call, keyed to the review ID: provider, model version, prompt-template version, input tokens, output tokens, and **request count**. Requests-per-review is then a query rather than an estimate, and `GET /quota-report` returns measured quota consumption. Track this from week 1, not retroactively.
 
 
 # 8-Week Project Roadmap
@@ -828,9 +849,9 @@ Estimate cost from:
 | Phase | Weeks | Deliverables |
 |---|---:|---|
 | Foundation | 1 | GitHub App registration, webhook endpoint, signature verification, deploy skeleton |
-| Diff & Context | 2 | Diff fetching/parsing, connected-file search |
-| Classification & Generation | 3 | Change classifier, task-decomposed prompt templates |
-| Verification | 4 | Judge pass, confidence/dedup filtering |
+| Diff & Context | 2 | Diff fetching/parsing, connected-file search, LLM provider adapter, free-tier provider trial (schema-validity gate) |
+| Classification & Generation | 3 | Batched change classifier, task-decomposed prompt templates |
+| Verification | 4 | Batched judge pass, confidence/dedup filtering, 8-PR mini-eval to validate provider viability |
 | Posting & Tracking | 5 | Comment posting, severity gating, outcome-tracking schema |
 | Evaluation | 6 | Eval harness — curated PR set, recall/false-positive measurement |
 | Tuning | 7 | Tuning against eval results, live test on own real repos |
@@ -876,7 +897,7 @@ pr-review-copilot/
 │   ├── 13_CICD.md
 │   ├── 14_Observability.md
 │   ├── 15_Deployment.md
-│   ├── 16_Cost_Analysis.md
+│   ├── 16_Quota_Analysis.md
 │   ├── 17_Roadmap.md
 │   ├── 18_Team_Responsibilities.md
 │   ├── 19_GitHub_Structure.md
@@ -928,16 +949,16 @@ An installable GitHub App that reads a pull request's diff and connected code co
 - Evaluation harness
 
 ## Architecture
-GitHub webhook → FastAPI backend → Diff Fetcher + Context Gatherer → Change Classifier → Review Generator (Sonnet) → Judge Pass (Haiku) → Confidence/Dedup Filter → Comment Poster → Postgres.
+GitHub webhook → FastAPI backend → Diff Fetcher + Context Gatherer → Change Classifier → Review Generator → Judge Pass → Confidence/Dedup Filter → Comment Poster → Postgres.
 
 ## Tech Stack
-Python, FastAPI, PostgreSQL, GitHub App API, Claude API (Haiku + Sonnet).
+Python, FastAPI, PostgreSQL, GitHub App API, free-tier LLM provider APIs behind a provider-agnostic adapter.
 
 ## Important Disclaimer
 This is a student portfolio project — a transparent, scoped implementation of proven techniques from funded competitors (Greptile, CodeRabbit, Ellipsis), built to demonstrate applied LLM-evaluation engineering. It does not claim to outperform those tools and is not an autonomous merge gate; a human developer remains responsible for the final merge decision.
 
 ## Running
-Document GitHub App credentials and Claude API keys as environment variables. Never commit secrets.
+Document GitHub App credentials and LLM provider API keys as environment variables. Never commit secrets.
 
 
 # Architecture Decision Records
@@ -953,10 +974,11 @@ Document GitHub App credentials and Claude API keys as environment variables. Ne
 **Rationale:** The pipeline is a fixed sequence (fetch → classify → generate → judge → filter → post), not an open-ended agent loop — a framework would add abstraction without solving a real problem here.
 **Trade-off:** Some boilerplate that a framework might otherwise handle.
 
-## ADR-003 — Haiku for Mechanical Steps, Sonnet for Review Generation
-**Decision:** Split model usage by task difficulty rather than using one model throughout.
-**Rationale:** Classification and grounding-verification are mechanical tasks; review generation needs real judgment. This roughly halves cost versus using the stronger model everywhere.
-**Trade-off:** Two model integrations to maintain instead of one.
+## ADR-003 — Free-Tier LLM Providers Behind a Provider Adapter
+**Context:** The project has no budget for paid LLM APIs, and no local GPU, so inference must run on free-tier hosted providers.
+**Decision:** Run every pipeline stage on free-tier hosted models (Gemini / GitHub Models / Groq / Cerebras / Mistral), accessed only through a provider-agnostic adapter. Paid model tiers are explicitly out of scope.
+**Rationale:** Free tiers are capable enough for this pipeline, and the adapter makes the provider a configuration choice rather than an architectural commitment — so a provider can be swapped when rate limits or output quality demand it. Provider selection is empirical: a candidate is rejected if it cannot return schema-valid JSON on at least ~90% of first attempts, since the whole pipeline depends on structured output.
+**Trade-off:** Expected recall is lower than a frontier-model implementation would achieve, and rate limits constrain how often the eval harness can run. Both are accepted and reported honestly — the evaluation names the model that produced each number. This is consistent with the project's stated positioning, which does not claim to out-perform funded competitors.
 
 ## ADR-004 — No Vector Database / RAG in v1
 **Decision:** Use targeted code search for connected-file context, not embeddings-based retrieval.
@@ -967,6 +989,12 @@ Document GitHub App credentials and Claude API keys as environment variables. Ne
 **Decision:** The tool posts review comments; it never writes code or blocks a merge.
 **Rationale:** Keeps the human as the final decision-maker and avoids the much higher stakes/scope risk of autofix in a portfolio-timeline project.
 **Trade-off:** Less "impressive-looking" than an autofix demo, but lower risk and more honest about v1 scope.
+
+## ADR-006 — Batch Classifier and Judge Calls to Conserve Request Quota
+**Context:** Free-tier providers meter usage per *request*, not per token. A naive implementation issues one classifier call per file and one judge call per finding — roughly 20 API calls for a typical 5-file PR, and ~800 calls for a single 40-PR evaluation run, which can exceed a day's quota.
+**Decision:** Batch the two mechanical stages. Classify all changed files in a single call, and judge all findings for a file (or for the whole PR) in a single call. Keep review generation one call per file.
+**Rationale:** Classification is short-output tagging and batches with no quality loss. Judge calls currently re-send the same file context once per finding, so batching removes pure duplication. This cuts a typical review from ~20 requests to ~7, roughly tripling how many evaluation runs fit inside a daily quota — which directly determines how many tuning iterations are possible in weeks 6-7. Review generation is deliberately *not* batched, because focused per-file context is where review quality comes from.
+**Trade-off:** Batched prompts are longer and their structured output is more complex to validate; a single malformed response now costs several files' worth of results rather than one.
 
 
 # Traceability Matrix
@@ -1002,7 +1030,7 @@ Document GitHub App credentials and Claude API keys as environment variables. Ne
 ## Technical Questions
 1. Why FastAPI?
 2. Why a GitHub App instead of a personal access token?
-3. Why split Haiku and Sonnet across pipeline stages?
+3. How does the provider adapter let you swap free-tier LLM providers without rearchitecting?
 4. Why Postgres over a document store here?
 5. Why no agent framework?
 6. How is the webhook verified?
@@ -1014,7 +1042,7 @@ Document GitHub App credentials and Claude API keys as environment variables. Ne
 12. How do you validate structured LLM output?
 13. How do you test the review pipeline?
 14. How do you handle LLM API failure?
-15. How do you monitor cost per review?
+15. How do you monitor free-tier request-quota consumption per review?
 16. How do you secure the GitHub App's permissions?
 17. Why not use RAG?
 18. When would a queue become necessary?
@@ -1029,7 +1057,7 @@ Document GitHub App credentials and Claude API keys as environment variables. Ne
 5. How would you detect the reviewer's own quality regressing over time?
 6. How would you isolate one installation's data from another's?
 7. How would you handle a compromised/malicious PR trying prompt injection?
-8. How would you reduce cost at 10x current PR volume?
+8. How would you stay inside free-tier request quotas at 10x current PR volume?
 9. How would you audit every posted finding after the fact?
 10. How would you evolve this from a student project into a real product?
 
@@ -1042,7 +1070,7 @@ Document GitHub App credentials and Claude API keys as environment variables. Ne
 6. A team dismisses every finding in one category. What should happen (v2)?
 7. The hosting service is cold and a webhook arrives. What happens to that PR?
 8. The same PR triggers two webhook deliveries. What happens?
-9. Cost per review suddenly triples. What do you check first?
+9. Requests per review suddenly triples. What do you check first?
 10. A stakeholder wants the bot to auto-merge clean PRs. What has to change before that's reasonable?
 
 ## Strong Answer Principle
@@ -1084,7 +1112,7 @@ Explain not only what was built, but why each architectural decision was made an
 8. Why is the pipeline synchronous rather than queued at this scale?
 9. How would you add a lightweight dashboard?
 10. How do you test the webhook endpoint?
-11. How do you track cost per review?
+11. How do you track free-tier request-quota consumption per review?
 12. How do you handle a failed pipeline stage?
 13. Why not use LangChain or a similar framework?
 14. What's the difference between HLD and LLD here?
@@ -1103,7 +1131,7 @@ Explain not only what was built, but why each architectural decision was made an
 5. How would you handle an adversarial PR designed to defeat the reviewer?
 6. How would you make the review pipeline explainable to a non-technical stakeholder?
 7. How would you design a model/prompt registry with rollback?
-8. How would you estimate cost at 1,000x current PR volume?
+8. What breaks first if PR volume grows 1,000x on free-tier quotas, and what would you change?
 9. How would you design a resilient pipeline if GitHub's API degrades?
 10. How would you evaluate human-AI agreement over the feedback loop?
 11. How would you decide when targeted search is no longer sufficient and a full code graph is needed?
@@ -1171,4 +1199,4 @@ A distinction-level project should demonstrate:
 - Deployment.
 - Observability.
 - Clear, documented trade-offs (no RAG, no autofix, no multi-platform in v1 — and why).
-- Measurable outcomes (cost per review, recall, false-positive rate).
+- Measurable outcomes (recall, false-positive rate, requests per review).

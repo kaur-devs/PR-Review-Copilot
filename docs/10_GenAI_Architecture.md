@@ -64,7 +64,7 @@ Measure:
 - Recall (known bugs caught / total known bugs).
 - False-positive rate (dismissed findings / total findings posted).
 - Judge-pass grounding accuracy.
-- Cost per review.
+- API requests consumed per review.
 - Latency per review.
 - Calibrated against independent competitor benchmarks (Qodo 60.1% F1, CodeRabbit 51.2% F1, Greptile's self-reported 82% bug-catch rate) — not expected to match a funded team's numbers, but measured with the same rigor.
 

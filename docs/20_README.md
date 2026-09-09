@@ -18,13 +18,13 @@ An installable GitHub App that reads a pull request's diff and connected code co
 - Evaluation harness
 
 ## Architecture
-GitHub webhook → FastAPI backend → Diff Fetcher + Context Gatherer → Change Classifier → Review Generator (Sonnet) → Judge Pass (Haiku) → Confidence/Dedup Filter → Comment Poster → Postgres.
+GitHub webhook → FastAPI backend → Diff Fetcher + Context Gatherer → Change Classifier → Review Generator → Judge Pass → Confidence/Dedup Filter → Comment Poster → Postgres.
 
 ## Tech Stack
-Python, FastAPI, PostgreSQL, GitHub App API, Claude API (Haiku + Sonnet).
+Python, FastAPI, PostgreSQL, GitHub App API, free-tier LLM provider APIs behind a provider-agnostic adapter.
 
 ## Important Disclaimer
 This is a student portfolio project — a transparent, scoped implementation of proven techniques from funded competitors (Greptile, CodeRabbit, Ellipsis), built to demonstrate applied LLM-evaluation engineering. It does not claim to outperform those tools and is not an autonomous merge gate; a human developer remains responsible for the final merge decision.
 
 ## Running
-Document GitHub App credentials and Claude API keys as environment variables. Never commit secrets.
+Document GitHub App credentials and LLM provider API keys as environment variables. Never commit secrets.

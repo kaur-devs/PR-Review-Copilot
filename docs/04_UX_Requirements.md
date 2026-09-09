@@ -6,7 +6,7 @@ The primary interface is **GitHub itself** — there is no separate frontend in 
 ## Information Architecture
 1. GitHub PR page (primary surface — inline review comments)
 2. GitHub App installation/settings page (GitHub-hosted)
-3. *(Optional, v2+)* Lightweight web dashboard — installed repos, recent reviews, cost report, eval results
+3. *(Optional, v2+)* Lightweight web dashboard — installed repos, recent reviews, quota report, eval results
 
 ## Primary User Flow
 Install app on repo → open/update PR → wait ~1 minute → review appears as inline comments, severity-gated → resolve or dismiss each comment → *(v2)* dashboard shows suppression behavior building up per repo.
@@ -21,7 +21,7 @@ Install app on repo → open/update PR → wait ~1 minute → review appears as 
 ### Optional Dashboard (v2+)
 - List of installed repos.
 - Recent reviews with severity breakdown.
-- Cost-per-review and cumulative cost.
+- Requests-per-review and cumulative quota consumption.
 - Eval report (recall / false-positive rate) from the latest harness run.
 
 ## States
