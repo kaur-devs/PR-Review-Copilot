@@ -19,8 +19,13 @@
 | TEST-006 | Judge pass given an ungrounded finding | Finding discarded before posting | High |
 | TEST-007 | Duplicate findings on the same block | Merged into one comment | Medium |
 | TEST-008 | GitHub API rate limit hit | Backoff/retry, review not silently dropped | High |
-| TEST-009 | Duplicate webhook delivery (GitHub retry) | Idempotent — no duplicate comments posted | High |
+| TEST-009 | Same delivery received twice (manual or recovery redelivery) | Second copy recorded as `duplicate`; one review; no duplicate comments | High |
 | TEST-010 | LLM API unavailable | Review fails gracefully, logged, not crashed | High |
+| TEST-011 | Two deliveries with different delivery IDs for the same PR and commit | One review claimed; second delivery recorded as `duplicate` | High |
+| TEST-012 | New commit pushed while the previous commit's review is still processing | Older review marked `superseded` and not posted; new commit reviewed | High |
+| TEST-013 | Server restarted mid-review | Stuck review found on startup and re-run; after 3 attempts marked `failed` | High |
+| TEST-014 | Crash after GitHub accepted the review but before it was marked `posted` | Recovery finds the existing review on GitHub; nothing posted twice | High |
+| TEST-015 | Unhandled `pull_request` action, e.g. `labeled` | Delivery recorded as `ignored`; no review created; `200` returned | Medium |
 
 ## Evaluation (recall / false-positive rate)
 Curate 30-50 real historical PRs from open-source repos with a documented follow-up bugfix commit (a bug the original PR missed) or a clean merge (a true negative). Run the pipeline against each and report recall and false-positive rate explicitly, calibrated against the competitor benchmarks in the GenAI Architecture document.

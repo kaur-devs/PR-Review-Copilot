@@ -383,12 +383,33 @@ Single FastAPI service is sufficient at student-project scale. If review volume 
 - `default_branch`
 - `created_at`
 
+### webhook_events
+One row per authenticated delivery, including duplicates and ignored actions, so every delivery is accounted for. Requests that fail signature verification are not stored; they are logged only, so unauthenticated input never reaches the database. The full payload is not stored — only the fields that identify the event (see Security Design).
+- `id`
+- `delivery_id` — the `X-GitHub-Delivery` GUID, **unique**
+- `event` — the `X-GitHub-Event` value, e.g. `pull_request`
+- `action` — e.g. `opened`, `synchronize`
+- `github_repo_id`
+- `pr_number`
+- `head_sha`
+- `outcome` — `accepted` / `duplicate` / `ignored`
+- `review_id` — nullable; the review this delivery created or was de-duplicated against
+- `received_at`
+
 ### reviews
+One row per unit of review work: one commit on one PR.
 - `id`
 - `repo_id`
 - `pr_number`
-- `status`
+- `head_sha` — the commit being reviewed
+- `status` — see the review state machine in the LLD
+- `attempts` — pipeline runs started; caps automatic recovery
+- `error_code` — nullable; stable internal code when `status = failed`
+- `github_review_id` — nullable; set once GitHub accepts the review
 - `created_at`
+- `updated_at` — refreshed on every status change; used to detect stuck reviews
+
+**Constraint:** unique (`repo_id`, `pr_number`, `head_sha`). This is the review-level idempotency key.
 
 ### findings
 - `id`
@@ -421,6 +442,7 @@ Single FastAPI service is sufficient at student-project scale. If review volume 
 erDiagram
     INSTALLATION ||--o{ REPO : has
     REPO ||--o{ REVIEW : receives
+    REVIEW ||--o{ WEBHOOK_EVENT : "triggered by"
     REVIEW ||--o{ FINDING : produces
     FINDING ||--o| OUTCOME : generates
     REPO ||--o{ REPO_SUPPRESSION : configures
@@ -429,11 +451,14 @@ erDiagram
 ## Indexes
 - `repos.github_installation_id`.
 - `reviews.repo_id + created_at`.
+- `webhook_events.delivery_id` (unique).
+- `reviews.repo_id + pr_number + head_sha` (unique).
+- `reviews.status + updated_at` — the stuck-review recovery scan.
 - `findings.review_id`.
 - `outcomes.repo_id + category`.
 
 ## Data Lifecycle
-Webhook received → review created → findings generated → filtered → posted → outcome recorded → *(v2)* suppression rules updated.
+Webhook received and recorded → review claimed (or delivery marked duplicate/ignored) → findings generated → filtered → review posted → outcome recorded → *(v2)* suppression rules updated.
 
 Use public open-source repos for evaluation; no private customer code is required for the student project.
 
@@ -444,7 +469,13 @@ Base URL: `/api/v1` (internal/dashboard endpoints; the primary integration surfa
 
 ## Webhook
 ### POST /webhooks/github
-Receives GitHub `pull_request` events. Verifies `X-Hub-Signature-256` before processing. Returns `200` immediately; processing continues asynchronously.
+Receives GitHub `pull_request` events. Verifies `X-Hub-Signature-256` before processing. Records the delivery and claims the review, then returns `200` within GitHub's 10-second limit; processing continues asynchronously. See the LLD section on webhook event state and idempotency.
+
+Responses:
+- `401` — signature missing or invalid. Nothing is stored.
+- `200` — every authenticated delivery, **including duplicates and unhandled actions**. The body states the outcome: `accepted`, `duplicate`, or `ignored`.
+
+Duplicates return `200`, not `409`. GitHub treats any non-2XX response as a failed delivery, so a `409` would flag a correctly handled duplicate as a failure.
 
 ## Reviews (dashboard-supporting, optional v2)
 ### GET /repos
@@ -477,7 +508,7 @@ Returns requests-per-review and cumulative free-tier quota consumption, broken d
 }
 ```
 
-Use 400 for validation, 401 for signature/authentication failures, 404 for missing resources, 409 for duplicate/idempotency conflicts, 500/503 for server/dependency failures.
+Use 400 for validation, 401 for signature/authentication failures, 404 for missing resources, 409 for duplicate/idempotency conflicts on internal endpoints (never on the webhook, see above), 500/503 for server/dependency failures.
 
 
 # Low-Level Design (LLD)
@@ -498,6 +529,16 @@ src/
 ```
 
 ## Key Interfaces
+
+### WebhookReceiver
+- `verify_signature(raw_body, signature_header)`
+- `record_delivery(delivery_id, event, action, repo, pr_number, head_sha)`
+
+### ReviewStore
+- `claim(repo_id, pr_number, head_sha)` — returns a review ID, or nothing if that commit is already claimed
+- `transition(review_id, expected_status, new_status)` — applies only if the review is still in `expected_status`
+- `has_newer_review(review_id)`
+- `find_stuck(older_than)`
 
 ### DiffFetcher
 - `fetch(pr)`
@@ -522,7 +563,8 @@ src/
 - `dedupe(findings)`
 
 ### CommentPoster
-- `post_review(pr, findings)`
+- `post_review(pr, head_sha, findings)`
+- `find_existing_review(pr, head_sha)` — used by recovery before re-posting
 
 ## Sequence
 
@@ -531,24 +573,102 @@ sequenceDiagram
     participant D as Developer
     participant GH as GitHub
     participant API as FastAPI
+    participant DB as Postgres
+    participant BG as Background task
     participant CTX as Context Gatherer
     participant LLM as LLM Provider
-    participant DB as Postgres
 
-    D->>GH: Open/update PR
+    D->>GH: Open PR / push commit
     GH->>API: Webhook (pull_request)
-    API->>API: Verify signature
-    API->>GH: Fetch diff
-    API->>CTX: Gather connected-file context
-    API->>LLM: Classify (batched) + generate findings
-    LLM-->>API: Structured findings
-    API->>LLM: Judge pass (batched)
-    LLM-->>API: Verified findings
-    API->>API: Confidence/dedup filter
-    API->>GH: Post review comments
-    API->>DB: Store review + findings
+    API->>API: Verify signature (invalid: 401, nothing stored)
+    API->>DB: Record delivery (unique delivery_id)
+    API->>DB: Claim review (unique repo + PR + head_sha)
+    Note over API,DB: Duplicate delivery, claimed commit, or unhandled action: return 200 and stop
+    API-->>GH: 200 OK (within 10 seconds)
+    API->>BG: Start pipeline for the claimed review
+    BG->>DB: status = processing
+    BG->>GH: Fetch diff
+    BG->>CTX: Gather connected-file context
+    BG->>LLM: Classify (batched) + generate findings
+    LLM-->>BG: Structured findings
+    BG->>LLM: Judge pass (batched)
+    LLM-->>BG: Verified findings
+    BG->>BG: Confidence/dedup filter
+    BG->>DB: Store findings (posted = false)
+    BG->>DB: Check for newer commit, then status = posting
+    BG->>GH: Post one review (event COMMENT, commit_id = head_sha)
+    BG->>DB: github_review_id, status = posted, findings posted = true
     GH-->>D: Comments appear on PR
 ```
+
+## Webhook Event State & Idempotency
+
+### Why this is stored
+- GitHub requires a 2XX response within 10 seconds, so the pipeline runs in a `BackgroundTasks` task after the response. That task lives inside the server process, so a crash or redeploy mid-review loses it silently. The stored review row is the only durable evidence that work was started.
+- GitHub does not retry failed deliveries automatically, but duplicates still arrive. They come from manual redelivery, from redelivering missed events after downtime (GitHub's recommended practice), and from one PR producing several events in quick succession.
+
+### Two idempotency keys
+| Key | Stored on | Catches |
+|---|---|---|
+| `delivery_id` (`X-GitHub-Delivery`) | `webhook_events`, unique | The exact same delivery arriving twice |
+| `repo_id` + `pr_number` + `head_sha` | `reviews`, unique | Different deliveries asking to review the same commit |
+
+The commit key is the one that protects the PR. GitHub's documentation does not say whether a redelivered event keeps its original delivery ID, so correctness must not depend on the delivery key alone. Keying reviews on the commit also defines what "the same review" means: a push creates a new `head_sha` and therefore a new review, while a repeated event for an unchanged commit does not.
+
+### Handled events
+v1 reviews `pull_request` deliveries whose action is `opened` or `synchronize` (commits pushed to the PR). Every other action is recorded as `ignored` and creates no review. Handling `reopened` later is safe, because the commit key stops an already-reviewed commit from being reviewed again.
+
+### Review state machine
+```mermaid
+stateDiagram-v2
+    [*] --> received: review claimed
+    received --> processing: pipeline starts
+    received --> failed: recovery gave up
+    processing --> skipped: nothing reviewable
+    processing --> no_findings: nothing survived the filters
+    processing --> superseded: newer commit claimed
+    processing --> posting: findings stored
+    processing --> failed: stage failed after retry
+    posting --> posted: GitHub accepted the review
+    posting --> failed: GitHub rejected the review
+    posted --> [*]
+    no_findings --> [*]
+    skipped --> [*]
+    superseded --> [*]
+    failed --> [*]
+```
+
+| Status | Meaning | PRD product state |
+|---|---|---|
+| `received` | Claimed; pipeline not started | `WEBHOOK_RECEIVED` |
+| `processing` | Pipeline running | `PROCESSING` |
+| `posting` | Findings stored; GitHub call in progress | `PROCESSING` |
+| `posted` | GitHub accepted the review | `REVIEW_POSTED` |
+| `no_findings` | Pipeline finished, but no finding survived the judge pass and filters, so nothing was posted | `REVIEW_POSTED` (nothing to post) |
+| `skipped` | Nothing reviewable: empty diff, or only binaries, lockfiles, or generated code (TEST-003, TEST-004) | — |
+| `superseded` | A newer commit on the same PR was claimed before this review posted | — |
+| `failed` | A stage failed after retry, or recovery gave up | `PROCESSING_FAILED` |
+
+### Ordering rules
+1. **Verify the signature before writing anything.** A missing or invalid signature returns `401` and is logged, never stored, so unauthenticated requests cannot fill the database.
+2. **Record the delivery and claim the review before returning `200`.** Both are single inserts and fit easily inside GitHub's 10-second limit. Once GitHub has its `200`, the stored row is the only record that the work exists.
+3. **A failed claim is not an error.** If the delivery ID or the commit key already exists, the delivery is recorded as `duplicate` and the endpoint still returns `200`.
+4. **Store findings before posting them**, with `posted = false`.
+5. **Check for a newer commit immediately before posting.** If a later review exists for the same PR, mark this one `superseded` and post nothing, because its line numbers may no longer match the code.
+6. **Set `posting` before calling GitHub, and `posted` after.** A crash between the two leaves the review in `posting`, which tells recovery to check GitHub before posting again.
+7. **Post exactly one review, with `event = COMMENT` and `commit_id = head_sha`.** Without `event`, GitHub leaves the review pending and invisible. Without `commit_id`, GitHub attaches the comments to the PR's latest commit, which may not be the commit that was reviewed. `APPROVE` and `REQUEST_CHANGES` are never used (ADR-005).
+8. **Every status change is conditional.** `ReviewStore.transition` updates a review only if it is still in the expected status, so two workers can never both advance the same review.
+
+### Recovery
+On startup, and optionally on a timer, `ReviewStore.find_stuck` returns reviews in `received`, `processing`, or `posting` whose `updated_at` is more than 10 minutes old.
+- **`received` or `processing`:** restart the pipeline if `attempts` is below 3. Otherwise mark the review `failed` with `error_code = REVIEW_STUCK`.
+- **`posting`:** call `CommentPoster.find_existing_review` first. If the App already posted a review on that commit, record its ID and mark the review `posted`. Otherwise post again.
+
+### Known gap: deliveries that never arrive
+If the service cannot respond within 10 seconds, GitHub marks the delivery failed and may never deliver it. A free-tier cold start can take longer than that. Nothing above can recover a delivery that never reached the database. The mitigation follows GitHub's own advice: on startup, list the App's recent deliveries through GitHub's REST API and redeliver any that did not receive a 2XX. The duplicate protection above makes that redelivery safe.
+
+### Timing
+Week 1 has no database, so the webhook handler only logs `delivery_id`. The week-2 skeleton may post its placeholder comment without these protections, because duplicate comments on a test repository are harmless. Everything in this section must exist before real findings are posted in week 5.
 
 ## Design Patterns
 - Adapter pattern for LLM provider abstraction — mandatory, not optional. Multiple free-tier providers are trialled, and different pipeline stages may run on different providers to spread request quota.
@@ -693,8 +813,13 @@ The system is a **review-support tool, not an autonomous merge gate**. It commen
 | TEST-006 | Judge pass given an ungrounded finding | Finding discarded before posting | High |
 | TEST-007 | Duplicate findings on the same block | Merged into one comment | Medium |
 | TEST-008 | GitHub API rate limit hit | Backoff/retry, review not silently dropped | High |
-| TEST-009 | Duplicate webhook delivery (GitHub retry) | Idempotent — no duplicate comments posted | High |
+| TEST-009 | Same delivery received twice (manual or recovery redelivery) | Second copy recorded as `duplicate`; one review; no duplicate comments | High |
 | TEST-010 | LLM API unavailable | Review fails gracefully, logged, not crashed | High |
+| TEST-011 | Two deliveries with different delivery IDs for the same PR and commit | One review claimed; second delivery recorded as `duplicate` | High |
+| TEST-012 | New commit pushed while the previous commit's review is still processing | Older review marked `superseded` and not posted; new commit reviewed | High |
+| TEST-013 | Server restarted mid-review | Stuck review found on startup and re-run; after 3 attempts marked `failed` | High |
+| TEST-014 | Crash after GitHub accepted the review but before it was marked `posted` | Recovery finds the existing review on GitHub; nothing posted twice | High |
+| TEST-015 | Unhandled `pull_request` action, e.g. `labeled` | Delivery recorded as `ignored`; no review created; `200` returned | Medium |
 
 ## Evaluation (recall / false-positive rate)
 Curate 30-50 real historical PRs from open-source repos with a documented follow-up bugfix commit (a bug the original PR missed) or a clean merge (a true negative). Run the pipeline against each and report recall and false-positive rate explicitly, calibrated against the competitor benchmarks in §GenAI Architecture.
@@ -852,7 +977,7 @@ Every provider response carries token usage. Log per call, keyed to the review I
 | Diff & Context | 2 | Diff fetching/parsing, connected-file search, LLM provider adapter, free-tier provider trial (schema-validity gate) |
 | Classification & Generation | 3 | Batched change classifier, task-decomposed prompt templates |
 | Verification | 4 | Batched judge pass, confidence/dedup filtering, 8-PR mini-eval to validate provider viability |
-| Posting & Tracking | 5 | Comment posting, severity gating, outcome-tracking schema |
+| Posting & Tracking | 5 | Delivery recording, idempotent review claims, stuck-review recovery, comment posting, severity gating, outcome-tracking schema |
 | Evaluation | 6 | Eval harness — curated PR set, recall/false-positive measurement |
 | Tuning | 7 | Tuning against eval results, live test on own real repos |
 | Ship | 8 | Documentation, architecture diagram, demo recording, deploy |
@@ -1002,13 +1127,13 @@ Document GitHub App credentials and LLM provider API keys as environment variabl
 | Business | Product | Technical | API/Component | Data | Test |
 |---|---|---|---|---|---|
 | BR-001 | App installation | TR-001 | GitHub App install flow | installations | TEST-001 |
-| BR-002 | Webhook detection | TR-001 | POST /webhooks/github | reviews | TEST-002 |
+| BR-002 | Webhook detection | TR-001 | POST /webhooks/github | webhook_events, reviews | TEST-002/009/011/015 |
 | BR-003 | Diff fetch/parse | TR-002 | Diff Fetcher | reviews | TEST-003/004 |
 | BR-004 | Connected-file context | TR-003 | Context Gatherer | — | — |
 | BR-005 | Finding generation | TR-004/005 | Review Generator | findings | TEST-005 |
 | BR-006 | Judge/grounding pass | TR-006 | Judge Pass | findings | TEST-006 |
 | BR-007 | Confidence/dedup filter | TR-007 | Filter | findings | TEST-007 |
-| BR-008 | Comment posting | TR-008 | Comment Poster | findings | TEST-008/009 |
+| BR-008 | Comment posting | TR-008 | Comment Poster | reviews, findings | TEST-008/012/013/014 |
 | BR-009 | Outcome capture | TR-009 | Outcome Tracker | outcomes | — |
 | BR-010 | Evaluation report | TR-010 | GET /eval-report | — | evaluation |
 
