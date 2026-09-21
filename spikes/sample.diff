@@ -1,0 +1,13 @@
+--- a/models.py
++++ b/models.py
+@@ -17,8 +17,8 @@
+ 
+ 
+ def get_user(user_id):
+-    """Return the user. Raises KeyError when there is no such user."""
+-    return _USERS[user_id]
++    """Return the user, or None when there is no such user."""
++    return _USERS.get(user_id)
+ 
+ 
+ def list_active_users():

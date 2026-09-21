@@ -3,3 +3,8 @@
 
 fastapi
 uvicorn[standard]
+
+# connected-file context
+unidiff
+tree-sitter
+tree-sitter-python
