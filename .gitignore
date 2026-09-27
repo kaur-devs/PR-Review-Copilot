@@ -18,3 +18,6 @@ venv/
 # Editors
 .vscode/
 .idea/
+
+# Test fixtures
+tests/fake_key.pem
