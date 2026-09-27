@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# A short way to open the database.
+#
+#   scripts/db                 open the local database
+#   scripts/db neon            open the cloud database
+#   scripts/db tables          list tables locally
+#   scripts/db neon tables     list tables in the cloud
+#   scripts/db "SELECT 1"      run one statement locally
+#
+# The local URL has "+asyncpg" in it, which is a Python detail that psql does
+# not understand, so it gets stripped out here.
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+target=local
+if [[ "${1:-}" == "neon" ]]; then
+  target=neon
+  shift
+fi
+
+if [[ "$target" == "neon" ]]; then
+  url=$(grep '^NEON_DATABASE_URL=' .env | cut -d= -f2-)
+else
+  url=$(grep '^DATABASE_URL=' .env | cut -d= -f2- | sed 's|+asyncpg||')
+fi
+
+case "${1:-}" in
+  "")     exec psql "$url" ;;
+  tables) exec psql "$url" -c '\dt' ;;
+  *)      exec psql "$url" -c "$1" ;;
+esac

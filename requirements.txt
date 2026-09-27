@@ -1,10 +1,32 @@
-# Add dependencies as you actually need them, not in advance.
-# Pin exact versions (pip freeze) once week 1 works and before you deploy.
+# Install with:  .venv/bin/pip install -r requirements.txt
+# Versions are left open while the project is moving. Pin them with
+# "pip freeze" before deploying.
 
+# Web service
 fastapi
 uvicorn[standard]
 
-# connected-file context
+# Reads settings out of the .env file
+python-dotenv
+
+# Database: SQLAlchemy talks to it, asyncpg is the driver, alembic handles
+# schema changes
+sqlalchemy[asyncio]
+asyncpg
+alembic
+
+# Proves who we are to GitHub (signs a JSON Web Token with our private key)
+pyjwt[crypto]
+
+# Makes HTTP calls to GitHub's API
+httpx
+
+# Reads unified diffs
 unidiff
+
+# Parses source code so we can find which function changed
 tree-sitter
 tree-sitter-python
+
+# Tests
+pytest
