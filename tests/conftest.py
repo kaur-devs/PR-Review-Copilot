@@ -7,6 +7,7 @@ at the test database by the time the application code loads.
 import os
 from pathlib import Path
 
+import pytest
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -29,3 +30,63 @@ os.environ["GITHUB_CLIENT_ID"] = "Iv1.testclientid"
 FAKE_KEY = PROJECT_ROOT / "tests" / "fake_key.pem"
 FAKE_KEY.write_text("-----BEGIN RSA PRIVATE KEY-----\nnot-a-real-key\n")
 os.environ["GITHUB_APP_PRIVATE_KEY_PATH"] = str(FAKE_KEY)
+
+
+def run_on_database(work):
+    """Run one piece of database work and give back the result.
+
+    Tests are ordinary functions, but the database code is asynchronous, so
+    each call here opens a connection, does the work, and closes it again.
+    """
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    async def go():
+        engine = create_async_engine(os.environ["DATABASE_URL"])
+        try:
+            async with engine.begin() as connection:
+                return await work(connection)
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(go())
+
+
+@pytest.fixture(scope="session", autouse=True)
+def database_schema():
+    """Build the tables once, before any test runs.
+
+    This uses the test database, which is a completely separate database from
+    the one used while developing, so a test run can never delete real data.
+    """
+    from src.db.models import Base
+
+    async def rebuild(connection):
+        await connection.run_sync(Base.metadata.drop_all)
+        await connection.run_sync(Base.metadata.create_all)
+
+    run_on_database(rebuild)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def empty_tables(database_schema):
+    """Empty every table before each test.
+
+    Each test then starts from nothing, and row numbering starts at 1 again,
+    which keeps the tests easy to read.
+    """
+    from sqlalchemy import text
+
+    from src.db.models import Base
+
+    table_names = ", ".join(Base.metadata.tables)
+
+    async def truncate(connection):
+        await connection.execute(
+            text(f"TRUNCATE {table_names} RESTART IDENTITY CASCADE")
+        )
+
+    run_on_database(truncate)
+    yield

@@ -46,6 +46,15 @@ Create the database tables:
 .venv/bin/alembic upgrade head
 ```
 
+After changing anything in `src/db/models.py`, create a migration for it:
+
+```bash
+.venv/bin/alembic revision --autogenerate -m "what changed"
+```
+
+Read the generated file in `alembic/versions/` before applying it — the
+automatic detection is good but not perfect.
+
 ## Running it
 
 ```bash
