@@ -7,6 +7,7 @@ import pytest
 
 from src.github import auth
 from src.github.client import GitHubClient
+from tests.fakes import fake_github as _fake_github
 
 
 @pytest.fixture(autouse=True)
@@ -16,39 +17,8 @@ def forget_cached_tokens():
     auth.clear_token_cache()
 
 
-def fake_github(pages: list[list[dict]] | None = None):
-    """Stands in for GitHub.
-
-    Answers the token request, then serves the pages given to it, adding the
-    "there is more" link between them the way GitHub does.
-    """
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
-    pages = pages or [[{"filename": "a.py"}]]
-    calls: list[httpx.Request] = []
-
-    def handle(request: httpx.Request) -> httpx.Response:
-        calls.append(request)
-
-        if request.url.path.endswith("/access_tokens"):
-            return httpx.Response(
-                200,
-                json={
-                    "token": "ghs_test",
-                    "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
-                },
-            )
-
-        page_number = int(request.url.params.get("page", 1))
-        body = pages[page_number - 1]
-
-        headers = {}
-        if page_number < len(pages):
-            next_url = str(request.url.copy_set_param("page", page_number + 1))
-            headers["Link"] = f'<{next_url}>; rel="next"'
-
-        return httpx.Response(200, json=body, headers=headers)
-
-    return httpx.AsyncClient(transport=httpx.MockTransport(handle)), calls
+def fake_github(pages=None):
+    return _fake_github(pages or [[{"filename": "a.py"}]])
 
 
 async def test_a_request_carries_an_installation_token():
