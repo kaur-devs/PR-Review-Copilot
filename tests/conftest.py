@@ -108,3 +108,24 @@ def empty_tables(database_schema):
 
     run_on_database(truncate)
     yield
+
+
+@pytest.fixture
+def recorded_pipeline_calls(monkeypatch):
+    calls = []
+
+    async def record(event, review_id, **kwargs):
+        calls.append((event, review_id))
+
+    monkeypatch.setattr("src.webhooks.router.process_pull_request", record)
+    return calls
+
+
+@pytest.fixture
+def client(database_schema, recorded_pipeline_calls):
+    from fastapi.testclient import TestClient
+
+    from src.main import app
+
+    with TestClient(app) as test_client:
+        yield test_client

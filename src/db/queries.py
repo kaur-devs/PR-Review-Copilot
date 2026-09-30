@@ -156,8 +156,22 @@ async def claim_review(
     return result.scalar_one_or_none()
 
 
+async def start_attempt(session: AsyncSession, review_id: int) -> None:
+    await session.execute(
+        update(Review)
+        .where(Review.id == review_id)
+        .values(attempts=Review.attempts + 1)
+    )
+    await session.commit()
+
+
 async def set_review_status(
-    session: AsyncSession, review_id: int, *, expected: str, new: str
+    session: AsyncSession,
+    review_id: int,
+    *,
+    expected: str,
+    new: str,
+    **extra: object,
 ) -> bool:
     """Move a review to a new status, but only if it is still in the old one.
 
@@ -171,7 +185,7 @@ async def set_review_status(
     result = await session.execute(
         update(Review)
         .where(Review.id == review_id, Review.status == expected)
-        .values(status=new)
+        .values(status=new, **extra)
     )
     await session.commit()
     return result.rowcount == 1

@@ -5,18 +5,10 @@ import hmac
 import json
 
 import pytest
-from fastapi.testclient import TestClient
 
-from src.main import app
 from tests.conftest import TEST_SECRET
 
 ENDPOINT = "/webhooks/github"
-
-
-@pytest.fixture
-def client():
-    with TestClient(app) as test_client:
-        yield test_client
 
 
 def build_payload(action="opened", pr_number=7):
