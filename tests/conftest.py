@@ -26,10 +26,28 @@ os.environ["GITHUB_WEBHOOK_SECRET"] = TEST_SECRET
 os.environ["GITHUB_APP_ID"] = "000000"
 os.environ["GITHUB_CLIENT_ID"] = "Iv1.testclientid"
 
-# A fake key file, so the startup check passes without the real one.
-FAKE_KEY = PROJECT_ROOT / "tests" / "fake_key.pem"
-FAKE_KEY.write_text("-----BEGIN RSA PRIVATE KEY-----\nnot-a-real-key\n")
-os.environ["GITHUB_APP_PRIVATE_KEY_PATH"] = str(FAKE_KEY)
+# A throwaway private key, generated fresh each run.
+#
+# It has to be a genuine RSA key rather than a placeholder, because the
+# authentication code really signs with it. It is never GitHub's key and is
+# thrown away when the tests finish.
+def _make_test_key() -> Path:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    path = PROJECT_ROOT / "tests" / "fake_key.pem"
+    path.write_bytes(
+        key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+    return path
+
+
+os.environ["GITHUB_APP_PRIVATE_KEY_PATH"] = str(_make_test_key())
 
 
 def run_on_database(work):
