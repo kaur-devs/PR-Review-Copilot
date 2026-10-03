@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 
+from src.context.gather import gather_context
 from src.db.queries import set_review_status, start_attempt
 from src.db.session import get_session_factory
 from src.diff.files import ChangedFileSet, fetch_changed_files
@@ -105,3 +106,37 @@ async def _review(
         len(readable),
         total_lines,
     )
+
+    context = await gather_context(
+        event.repo_full_name,
+        event.head_sha,
+        event.installation_id,
+        readable,
+        client=github_client,
+    )
+
+    await set_review_status(
+        session,
+        review_id,
+        expected=STATUS_PROCESSING,
+        new=STATUS_PROCESSING,
+        context_status=context.status,
+    )
+
+    logger.info(
+        "review %s: context is %s, %s connected files, %s characters",
+        review_id,
+        context.status,
+        len(context.files),
+        context.characters,
+    )
+    for item in context.items:
+        logger.info(
+            "review %s: %s uses %s at lines %s (%s, %s)",
+            review_id,
+            item.file,
+            item.changed_symbol,
+            ", ".join(str(line) for line in item.reference_lines),
+            item.relation,
+            item.confidence,
+        )
