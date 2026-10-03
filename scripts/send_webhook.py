@@ -1,31 +1,28 @@
-"""Send a fake GitHub webhook to your local service.
+"""Send a webhook to your local service without needing a tunnel.
 
-Useful because you do not need a tunnel, an internet connection, or a real
-pull request. It signs the message with the secret from your .env file, so
-the service accepts it exactly as it would accept a real one.
+Two modes.
 
-Examples:
+Fake, for quick checks:
 
-    # A new pull request
     .venv/bin/python scripts/send_webhook.py
-
-    # The same message again, to see duplicate handling
-    .venv/bin/python scripts/send_webhook.py --delivery same-id
-    .venv/bin/python scripts/send_webhook.py --delivery same-id
-
-    # Someone pushed more commits
-    .venv/bin/python scripts/send_webhook.py --action synchronize --sha bbb222
-
-    # Something we do not review
+    .venv/bin/python scripts/send_webhook.py --delivery same-id      (run twice)
     .venv/bin/python scripts/send_webhook.py --action labeled
+    .venv/bin/python scripts/send_webhook.py --bad-signature
 
-    # A real payload you copied from GitHub's Recent Deliveries page
-    .venv/bin/python scripts/send_webhook.py --file saved_payload.json
+Real, which looks up the actual installation, repository and commit so the
+pipeline fetches a genuine pull request:
+
+    .venv/bin/python scripts/send_webhook.py --real --repo kaur-devs/codebase-chat --pr 3
+
+Also accepts a payload saved from GitHub's Recent Deliveries page:
+
+    .venv/bin/python scripts/send_webhook.py --file saved.json
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import hmac
 import json
@@ -38,11 +35,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
 load_dotenv(PROJECT_ROOT / ".env")
 
+DEFAULT_REPO = "kaur-devs/codebase-chat"
 
-def build_payload(action: str, sha: str, pr_number: int) -> dict:
-    """A message shaped like GitHub's, with the fields our service reads."""
+
+def fake_payload(repo: str, action: str, sha: str, pr_number: int) -> dict:
     return {
         "action": action,
         "number": pr_number,
@@ -50,21 +49,84 @@ def build_payload(action: str, sha: str, pr_number: int) -> dict:
             "head": {"sha": sha.ljust(40, "0")},
             "base": {"sha": "base".ljust(40, "0")},
         },
-        "repository": {"id": 987654321, "full_name": "kaur-devs/pr-review-sandbox"},
+        "repository": {"id": 987654321, "full_name": repo},
         "installation": {"id": 55555555},
     }
 
 
+async def real_payload(repo: str, action: str, pr_number: int) -> dict:
+    import httpx
+
+    from src.github.auth import API_HEADERS, GITHUB_API, build_app_jwt
+    from src.github.client import GitHubClient
+
+    async with httpx.AsyncClient(timeout=15) as http:
+        headers = {**API_HEADERS, "Authorization": f"Bearer {build_app_jwt()}"}
+        response = await http.get(f"{GITHUB_API}/app/installations", headers=headers)
+        response.raise_for_status()
+        installations = response.json()
+
+    if not installations:
+        raise SystemExit("The App is not installed anywhere. Run scripts/check_auth.py")
+
+    installation_id = installations[0]["id"]
+
+    async with GitHubClient(installation_id) as github:
+        repository = await github.get(f"/repos/{repo}")
+        pull_request = await github.get(f"/repos/{repo}/pulls/{pr_number}")
+
+    print(
+        f"using installation {installation_id}, repo id {repository['id']}, "
+        f"head {pull_request['head']['sha'][:7]}"
+    )
+
+    return {
+        "action": action,
+        "number": pr_number,
+        "pull_request": {
+            "head": {"sha": pull_request["head"]["sha"]},
+            "base": {"sha": pull_request["base"]["sha"]},
+        },
+        "repository": {"id": repository["id"], "full_name": repository["full_name"]},
+        "installation": {"id": installation_id},
+    }
+
+
+def send(url: str, body: bytes, signature: str, event: str, delivery: str) -> int:
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": event,
+            "X-GitHub-Delivery": delivery,
+            "X-Hub-Signature-256": signature,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request) as response:
+            print(f"{response.status}  {response.read().decode()}")
+    except urllib.error.HTTPError as error:
+        print(f"{error.code}  {error.read().decode()}")
+    except urllib.error.URLError as error:
+        print(f"Could not reach {url} — is uvicorn running?  ({error.reason})")
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--action", default="opened", help="opened, synchronize, ...")
-    parser.add_argument("--sha", default="aaa111", help="the commit being reviewed")
-    parser.add_argument("--pr", type=int, default=1, help="pull request number")
-    parser.add_argument("--delivery", default=None, help="reuse to test duplicates")
+    parser.add_argument("--repo", default=DEFAULT_REPO)
+    parser.add_argument("--action", default="opened")
+    parser.add_argument("--sha", default="aaa111")
+    parser.add_argument("--pr", type=int, default=1)
+    parser.add_argument("--delivery", default=None)
     parser.add_argument("--event", default="pull_request")
-    parser.add_argument("--file", default=None, help="a saved payload to send instead")
+    parser.add_argument("--real", action="store_true")
+    parser.add_argument("--file", default=None)
     parser.add_argument("--url", default="http://127.0.0.1:8000/webhooks/github")
-    parser.add_argument("--bad-signature", action="store_true", help="test rejection")
+    parser.add_argument("--bad-signature", action="store_true")
     args = parser.parse_args()
 
     secret = os.environ.get("GITHUB_WEBHOOK_SECRET")
@@ -74,39 +136,19 @@ def main() -> int:
 
     if args.file:
         body = Path(args.file).read_bytes()
+    elif args.real:
+        payload = asyncio.run(real_payload(args.repo, args.action, args.pr))
+        body = json.dumps(payload).encode()
     else:
-        body = json.dumps(build_payload(args.action, args.sha, args.pr)).encode()
+        body = json.dumps(fake_payload(args.repo, args.action, args.sha, args.pr)).encode()
 
-    # Sign it the same way GitHub does.
     if args.bad_signature:
         signature = "sha256=" + "0" * 64
     else:
         signature = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
     delivery = args.delivery or f"local-{os.urandom(4).hex()}"
-
-    request = urllib.request.Request(
-        args.url,
-        data=body,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "X-GitHub-Event": args.event,
-            "X-GitHub-Delivery": delivery,
-            "X-Hub-Signature-256": signature,
-        },
-    )
-
-    try:
-        with urllib.request.urlopen(request) as response:
-            print(f"{response.status}  {response.read().decode()}")
-    except urllib.error.HTTPError as error:
-        print(f"{error.code}  {error.read().decode()}")
-    except urllib.error.URLError as error:
-        print(f"Could not reach {args.url} — is uvicorn running?  ({error.reason})")
-        return 1
-
-    return 0
+    return send(args.url, body, signature, args.event, delivery)
 
 
 if __name__ == "__main__":
