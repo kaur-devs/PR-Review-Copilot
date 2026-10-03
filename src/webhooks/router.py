@@ -144,7 +144,7 @@ async def receive_github_webhook(
 
     # Step 7: hand the work off. A background task runs after this reply has
     # been sent, which is what keeps us inside GitHub's ten second limit.
-    background_tasks.add_task(process_pull_request, pull_request)
+    background_tasks.add_task(process_pull_request, pull_request, review_id)
 
     logger.info(
         "accepted %s#%s %s as review %s (delivery %s)",
