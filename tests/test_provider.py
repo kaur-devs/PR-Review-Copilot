@@ -3,7 +3,6 @@ import json
 import httpx
 import pytest
 
-from src.review import provider as provider_module
 from src.review.provider import (
     InvalidResponse,
     LLMError,
@@ -19,14 +18,6 @@ def reset_quota():
     quota.reset()
     yield
     quota.reset()
-
-
-@pytest.fixture(autouse=True)
-def no_waiting(monkeypatch):
-    async def instant(seconds):
-        return None
-
-    monkeypatch.setattr(provider_module.asyncio, "sleep", instant)
 
 
 def fake_model(
