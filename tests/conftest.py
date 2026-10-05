@@ -129,3 +129,14 @@ def client(database_schema, recorded_pipeline_calls):
 
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture(autouse=True)
+def no_backoff_waiting(monkeypatch):
+    """Retry backoff is real seconds. Tests should not sit through it."""
+    from src.review import provider
+
+    async def instant(seconds):
+        return None
+
+    monkeypatch.setattr(provider.asyncio, "sleep", instant)
