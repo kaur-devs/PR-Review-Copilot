@@ -34,7 +34,7 @@ def fake_model(
             return httpx.Response(code, json={"error": {"message": "no"}})
 
         payload = body or {
-            "model": "llama-3.3-70b-versatile",
+            "model": "openai/gpt-oss-120b",
             "choices": [{"message": {"content": content}}],
         }
         if usage and "usage" not in payload:
@@ -66,7 +66,7 @@ async def test_the_request_is_shaped_the_way_providers_expect():
         await model.complete("system words", "user words")
 
     body = json.loads(calls[0].content)
-    assert body["model"] == "llama-3.3-70b-versatile"
+    assert body["model"] == "openai/gpt-oss-120b"
     assert body["messages"][0] == {"role": "system", "content": "system words"}
     assert body["messages"][1] == {"role": "user", "content": "user words"}
     assert calls[0].headers["Authorization"] == "Bearer test-key"
