@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from src.context.references import Reference
 from src.context.snapshot import Snapshot
-from src.context.symbols import parse_source, symbol_at_line
+from src.context.symbols import Symbol, parse_source, symbol_at_line
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,7 @@ class ContextBundle:
     dropped: list[ContextItem] = field(default_factory=list)
     problems: dict[str, str] = field(default_factory=dict)
     status: str = STATUS_OK
+    symbols: list[Symbol] = field(default_factory=list)
 
     def __len__(self) -> int:
         return len(self.items)
@@ -100,8 +101,11 @@ def assemble(
     problems: dict[str, str] | None = None,
     *,
     budget: int = CHARACTER_BUDGET,
+    symbols: list[Symbol] | None = None,
 ) -> ContextBundle:
-    bundle = ContextBundle(problems=dict(problems or {}))
+    bundle = ContextBundle(
+        problems=dict(problems or {}), symbols=list(symbols or [])
+    )
 
     strong = [r for r in references if r.confidence >= MINIMUM_CONFIDENCE]
     candidates: list[ContextItem] = []

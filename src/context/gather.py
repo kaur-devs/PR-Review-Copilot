@@ -33,10 +33,10 @@ async def gather_context(
 
             if not symbols:
                 logger.info("no symbols were resolved, nothing to look up")
-                return assemble(snapshot, [], problems)
+                return assemble(snapshot, [], problems, symbols=[])
 
             references = find_references(snapshot, symbols, changed_paths)
-            return assemble(snapshot, references, problems)
+            return assemble(snapshot, references, problems, symbols=symbols)
 
     except (SnapshotUnavailable, SnapshotTooLarge) as error:
         logger.warning("no context for %s: %s", repo_full_name, error)

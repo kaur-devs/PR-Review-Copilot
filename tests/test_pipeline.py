@@ -7,9 +7,13 @@ from src.db.session import get_session_factory
 from src.github import auth
 from src.pipeline import process_pull_request
 from src.webhooks.events import PullRequestEvent
-from tests.fakes import api_file, fake_github
+from tests.fakes import api_file, fake_github, fake_model, make_patch
 
-PATCH = "@@ -17,4 +17,4 @@\n def get_user(user_id):\n-    return _USERS[user_id]\n+    return _USERS.get(user_id)\n \n"
+PATCH = make_patch(
+    ["def get_user(user_id):", "    return _USERS[user_id]", ""],
+    ["def get_user(user_id):", "    return _USERS.get(user_id)", ""],
+    start=17,
+)
 
 EVENT = PullRequestEvent(
     delivery_id="d-1",
@@ -46,18 +50,21 @@ async def review_row(review_id: int):
         return result.one()
 
 
-async def run_pipeline(pages):
+async def run_pipeline(pages, *, findings=None, classifications=None):
     review_id = await make_review()
     client, calls = fake_github(pages)
-    await process_pull_request(EVENT, review_id, github_client=client)
+    model = fake_model(classifications=classifications, findings=findings)
+    await process_pull_request(
+        EVENT, review_id, github_client=client, llm_client=model
+    )
     return review_id, calls
 
 
-async def test_a_review_moves_out_of_received_and_counts_the_attempt():
+async def test_a_review_with_nothing_to_say_ends_in_no_findings():
     review_id, _ = await run_pipeline([[api_file("models.py", patch=PATCH)]])
 
     status, attempts, error_code = await review_row(review_id)
-    assert status == "processing"
+    assert status == "no_findings"
     assert attempts == 1
     assert error_code is None
 
@@ -86,14 +93,14 @@ async def test_a_pull_request_with_no_diffs_at_all_is_skipped():
     assert status == "skipped"
 
 
-async def test_reviewable_files_keep_the_review_in_progress():
+async def test_lockfiles_are_dropped_before_the_model_is_asked():
     review_id, _ = await run_pipeline([[
         api_file("models.py", patch=PATCH),
         api_file("poetry.lock", patch=PATCH),
     ]])
 
     status, _, _ = await review_row(review_id)
-    assert status == "processing"
+    assert status == "no_findings"
 
 
 async def test_a_failure_marks_the_review_failed_with_a_code():
@@ -116,7 +123,7 @@ async def test_a_failure_marks_the_review_failed_with_a_code():
     assert error_code == "PIPELINE_UNEXPECTED"
 
 
-async def test_a_review_already_being_worked_on_is_left_alone():
+async def test_a_review_already_finished_is_left_alone():
     review_id, _ = await run_pipeline([[api_file("models.py", patch=PATCH)]])
 
     client, calls = fake_github([[api_file("models.py", patch=PATCH)]])
@@ -124,5 +131,62 @@ async def test_a_review_already_being_worked_on_is_left_alone():
 
     assert calls == []
     status, attempts, _ = await review_row(review_id)
-    assert status == "processing"
+    assert status == "no_findings"
     assert attempts == 2
+
+
+async def test_findings_are_stored_against_the_review():
+    from sqlalchemy import select
+
+    from src.db.models import Finding
+
+    review_id, _ = await run_pipeline(
+        [[api_file("models.py", patch=PATCH)]],
+        classifications={"models.py": "logic"},
+        findings=[{
+            "file": "models.py",
+            "line": 18,
+            "severity": "high",
+            "category": "correctness",
+            "message": "Callers assume a user is returned",
+            "rationale": "service.py reads user.email straight after.",
+            "confidence": 0.8,
+        }],
+    )
+
+    async with get_session_factory()() as session:
+        rows = (await session.execute(
+            select(Finding.file, Finding.line, Finding.severity, Finding.posted)
+            .where(Finding.review_id == review_id)
+        )).all()
+
+    assert rows == [("models.py", 18, "high", True)]
+
+    status, _, _ = await review_row(review_id)
+    assert status == "posted"
+
+
+async def test_a_finding_on_a_line_outside_the_diff_is_not_stored():
+    review_id, _ = await run_pipeline(
+        [[api_file("models.py", patch=PATCH)]],
+        findings=[{
+            "file": "models.py", "line": 9000, "severity": "high",
+            "category": "correctness", "message": "x", "rationale": "y",
+            "confidence": 0.9,
+        }],
+    )
+
+    status, _, _ = await review_row(review_id)
+    assert status == "no_findings"
+
+
+async def test_without_a_model_the_review_fails_with_a_clear_code(monkeypatch):
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+    review_id = await make_review()
+    client, _ = fake_github([[api_file("models.py", patch=PATCH)]])
+    await process_pull_request(EVENT, review_id, github_client=client)
+
+    status, _, error_code = await review_row(review_id)
+    assert status == "failed"
+    assert error_code == "LLM_NOT_CONFIGURED"

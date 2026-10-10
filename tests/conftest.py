@@ -26,6 +26,14 @@ os.environ["GITHUB_WEBHOOK_SECRET"] = TEST_SECRET
 os.environ["GITHUB_APP_ID"] = "000000"
 os.environ["GITHUB_CLIENT_ID"] = "Iv1.testclientid"
 
+# A model that does not exist, so a test can never reach a real provider.
+os.environ["LLM_API_KEY"] = "test-llm-key"
+os.environ["LLM_BASE_URL"] = "https://model.invalid/v1"
+os.environ["LLM_MODEL"] = "test-model"
+
+# The development trace would drown the test output.
+os.environ["PIPELINE_TRACE"] = "0"
+
 # A throwaway private key, generated fresh each run.
 #
 # It has to be a genuine RSA key rather than a placeholder, because the

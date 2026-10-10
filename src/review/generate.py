@@ -4,6 +4,7 @@ import logging
 from collections import defaultdict
 
 from src.classification.kinds import Classification
+from src.common import trace
 from src.context.bundle import ContextBundle
 from src.diff.parse import FileDiff
 from src.review.findings import CATEGORIES, SEVERITIES, Finding
@@ -28,43 +29,38 @@ def _coerce_confidence(value: object) -> float | None:
 
 def _read_finding(
     entry: object, diffs_by_file: dict[str, FileDiff], context: ContextBundle
-) -> Finding | None:
+) -> tuple[Finding | None, str]:
     if not isinstance(entry, dict):
-        return None
+        return None, "not an object"
 
     path = entry.get("file")
     diff = diffs_by_file.get(path)
     if diff is None:
-        logger.info("a finding named a file that is not in this change: %s", path)
-        return None
+        return None, "that file is not in this change"
 
     try:
         line = int(entry.get("line"))
     except (TypeError, ValueError):
-        logger.info("a finding for %s had no usable line number", path)
-        return None
+        return None, "no usable line number"
 
     if not diff.can_comment_on(line):
-        logger.info(
-            "a finding for %s pointed at line %s, which is not in the diff", path, line
-        )
-        return None
+        return None, f"line {line} is not in the diff, GitHub would refuse it"
 
     severity = entry.get("severity")
     if severity not in SEVERITIES:
-        return None
+        return None, f"unknown severity {severity!r}"
 
     category = entry.get("category")
     if category not in CATEGORIES:
-        return None
+        return None, f"unknown category {category!r}"
 
     message = str(entry.get("message", "")).strip()
     if not message:
-        return None
+        return None, "empty message"
 
     confidence = _coerce_confidence(entry.get("confidence"))
     if confidence is None:
-        return None
+        return None, f"confidence {entry.get('confidence')!r} is not a number"
 
     evidence = tuple(
         item.file for item in context.items if item.file != path
@@ -79,7 +75,7 @@ def _read_finding(
         rationale=str(entry.get("rationale", "")).strip()[:MAX_RATIONALE_LENGTH],
         confidence=confidence,
         evidence_files=evidence,
-    )
+    ), ""
 
 
 def _group_by_kind(
@@ -121,9 +117,13 @@ async def _generate_for_kind(
 
     findings = []
     for entry in raw[:MAX_FINDINGS_PER_REQUEST]:
-        finding = _read_finding(entry, diffs_by_file, context)
+        finding, reason = _read_finding(entry, diffs_by_file, context)
         if finding is not None:
             findings.append(finding)
+        else:
+            logger.info("dropped a finding for %s files: %s", kind, reason)
+            if isinstance(entry, dict):
+                trace.rejected(entry, reason)
 
     logger.info(
         "%s files: %s findings kept out of %s returned", kind, len(findings), len(raw)
