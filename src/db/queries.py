@@ -21,7 +21,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.db.models import Installation, Repo, Review, WebhookEvent
+from src.db.models import Finding, Installation, Repo, Review, WebhookEvent
 from src.webhooks.events import PullRequestEvent
 
 
@@ -189,3 +189,57 @@ async def set_review_status(
     )
     await session.commit()
     return result.rowcount == 1
+
+
+async def store_findings(session: AsyncSession, review_id: int, findings) -> int:
+    if not findings:
+        return 0
+
+    session.add_all([
+        Finding(
+            review_id=review_id,
+            file=finding.file,
+            line=finding.line,
+            severity=finding.severity,
+            category=finding.category,
+            rationale=finding.rationale or finding.message,
+            confidence=finding.confidence,
+            posted=False,
+        )
+        for finding in findings
+    ])
+    await session.commit()
+    return len(findings)
+
+
+async def record_posted_review(
+    session: AsyncSession,
+    review_id: int,
+    github_review_id: int,
+    comment_ids: dict[tuple[str, int], int],
+) -> int:
+    """Link our findings to the comments GitHub created for them.
+
+    The comment ids are what later tells us whether a developer resolved or
+    dismissed each one, which is how the project measures whether it helps.
+    """
+    await session.execute(
+        update(Review)
+        .where(Review.id == review_id)
+        .values(github_review_id=github_review_id)
+    )
+
+    matched = 0
+    findings = (
+        await session.execute(select(Finding).where(Finding.review_id == review_id))
+    ).scalars().all()
+
+    for finding in findings:
+        comment_id = comment_ids.get((finding.file, finding.line))
+        if comment_id is not None:
+            finding.posted = True
+            finding.github_comment_id = comment_id
+            matched += 1
+
+    await session.commit()
+    return matched
