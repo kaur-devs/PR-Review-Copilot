@@ -19,6 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.config import get_settings
 from src.db.queries import claim_review, ensure_repo, record_delivery, update_delivery
 from src.db.session import get_session
+from src.outcomes.events import is_thread_event, read_thread_event
+from src.outcomes.record import record_thread_outcome
 from src.pipeline import process_pull_request
 from src.webhooks.events import PullRequestEvent, is_actionable
 from src.webhooks.signature import SIGNATURE_HEADER, is_valid_signature
@@ -97,6 +99,12 @@ async def receive_github_webhook(
     # need. We do this before writing anything, so the row we write already
     # knows what we decided.
     action = payload.get("action")
+
+    # A developer resolved or reopened one of our comment threads. Cheap to
+    # handle, and the only way we learn whether a comment was useful.
+    if is_thread_event(event, action):
+        return await _record_outcome(session, delivery_id, event, action, payload)
+
     pull_request = None
     if is_actionable(event, action):
         try:
@@ -161,3 +169,26 @@ async def receive_github_webhook(
         pull_request=pull_request.pr_number,
         head_sha=pull_request.head_sha,
     )
+
+
+async def _record_outcome(
+    session: AsyncSession, delivery_id: str, event: str, action: str, payload: dict
+) -> JSONResponse:
+    thread = read_thread_event(delivery_id, payload)
+    if thread is None:
+        return accepted("ignored", event=event, action=action, reason="unreadable thread")
+
+    await record_delivery(
+        session,
+        delivery_id=delivery_id,
+        event=event,
+        action=action,
+        outcome="accepted",
+    )
+
+    result = await record_thread_outcome(session, thread)
+
+    if not result.anything_matched:
+        return accepted("ignored", event=event, action=action, reason="not our comments")
+
+    return accepted("accepted", recorded=result.matched, resolved=thread.resolved)
