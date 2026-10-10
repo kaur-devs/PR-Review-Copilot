@@ -259,7 +259,12 @@ class Outcome(Base):
     """
 
     __tablename__ = "outcomes"
-    __table_args__ = (Index("ix_outcomes_repo_category", "repo_id", "category"),)
+    __table_args__ = (
+        # One current outcome per finding. A thread can be resolved and
+        # reopened, so the row is replaced rather than appended to.
+        UniqueConstraint("finding_id", name="uq_outcomes_finding"),
+        Index("ix_outcomes_repo_category", "repo_id", "category"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     finding_id: Mapped[int] = mapped_column(
