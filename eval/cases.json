@@ -1,0 +1,65 @@
+{
+  "cases": [
+    {
+      "id": "retriever-renamed-keys",
+      "repo": "kaur-devs/codebase-chat",
+      "pr": 7,
+      "installation_id": 166408152,
+      "note": "Deliberately seeded. Renames dict keys without updating the caller.",
+      "expected": [
+        {
+          "file": "backend/app/services/retriever.py",
+          "line": 113,
+          "note": "ZeroDivisionError when similar_chunks is empty"
+        },
+        {
+          "file": "backend/app/services/retriever.py",
+          "line": 116,
+          "note": "renamed keys break chat.py, which was not changed"
+        }
+      ],
+      "expected_context": ["backend/app/routers/chat.py"]
+    },
+    {
+      "id": "embedder-return-shape",
+      "repo": "kaur-devs/codebase-chat",
+      "pr": 6,
+      "installation_id": 166408152,
+      "note": "Real PR. embed_texts changed to return a tuple.",
+      "expected": [
+        {
+          "file": "backend/app/services/embedder.py",
+          "line": 62,
+          "note": "return shape changed, breaks callers"
+        }
+      ],
+      "expected_context": [
+        "backend/app/routers/repos.py",
+        "backend/app/services/retriever.py"
+      ]
+    },
+    {
+      "id": "embedder-blocking-sleep",
+      "repo": "kaur-devs/codebase-chat",
+      "pr": 4,
+      "installation_id": 166408152,
+      "note": "Real PR. time.sleep in code reached from async paths.",
+      "expected": [
+        {
+          "file": "backend/app/services/embedder.py",
+          "line": 29,
+          "note": "time.sleep blocks the event loop"
+        },
+        {
+          "file": "backend/app/services/embedder.py",
+          "line": 42,
+          "note": "time.sleep(21) between batches"
+        }
+      ],
+      "expected_context": [
+        "backend/app/routers/repos.py",
+        "backend/app/services/retriever.py"
+      ]
+    }
+  ]
+}

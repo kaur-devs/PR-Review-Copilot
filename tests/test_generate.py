@@ -245,3 +245,10 @@ def test_a_finding_sorts_by_severity_first():
     low = Finding("a.py", 1, "low", "correctness", "m", "r", 0.9)
 
     assert sorted([low, high], key=lambda f: f.sort_key)[0] is high
+
+
+def test_templates_can_be_switched_off_for_an_experiment(monkeypatch):
+    """Hypothesis H3: do per-kind questions actually help?"""
+    monkeypatch.setenv("TEMPLATES_ENABLED", "0")
+
+    assert build_system_prompt(API) == build_system_prompt(LOGIC)

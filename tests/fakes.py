@@ -111,9 +111,12 @@ def api_file(
 
 
 def fake_model(
-    *, classifications: dict[str, str] | None = None, findings: list[dict] | None = None
+    *,
+    classifications: dict[str, str] | None = None,
+    findings: list[dict] | None = None,
+    verdicts: list[dict] | None = None,
 ) -> httpx.AsyncClient:
-    """Answers both kinds of request the pipeline makes of a model."""
+    """Answers all three kinds of request the pipeline makes of a model."""
     import json
 
     def handle(request: httpx.Request) -> httpx.Response:
@@ -125,6 +128,15 @@ def fake_model(
                 "files": [
                     {"file": path, "kind": kind, "reason": "test"}
                     for path, kind in (classifications or {}).items()
+                ]
+            }
+        elif "supported by the code" in system:
+            answer = {
+                "verdicts": verdicts
+                if verdicts is not None
+                else [
+                    {"index": n, "supported": True, "reason": "looks right"}
+                    for n in range(len(findings or []))
                 ]
             }
         else:

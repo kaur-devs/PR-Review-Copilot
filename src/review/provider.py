@@ -81,7 +81,9 @@ class LLMProvider:
     _owns_client: bool = field(default=False, init=False)
 
     @classmethod
-    def from_env(cls, client: httpx.AsyncClient | None = None) -> "LLMProvider":
+    def from_env(
+        cls, client: httpx.AsyncClient | None = None, model: str | None = None
+    ) -> "LLMProvider":
         api_key = os.getenv("LLM_API_KEY")
         if not api_key:
             raise LLMNotConfigured(
@@ -91,7 +93,7 @@ class LLMProvider:
         return cls(
             api_key=api_key,
             base_url=os.getenv("LLM_BASE_URL", DEFAULT_BASE_URL),
-            model=os.getenv("LLM_MODEL", DEFAULT_MODEL),
+            model=model or os.getenv("LLM_MODEL", DEFAULT_MODEL),
             client=client,
         )
 

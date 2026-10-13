@@ -190,3 +190,49 @@ async def test_without_a_model_the_review_fails_with_a_clear_code(monkeypatch):
     status, _, error_code = await review_row(review_id)
     assert status == "failed"
     assert error_code == "LLM_NOT_CONFIGURED"
+
+
+async def test_the_judge_can_drop_a_finding_before_it_is_posted():
+    from sqlalchemy import func, select
+
+    from src.db.models import Finding
+
+    review_id = await make_review()
+    client, _ = fake_github([[api_file("models.py", patch=PATCH)]])
+    model = fake_model(
+        findings=[{
+            "file": "models.py", "line": 18, "severity": "high",
+            "category": "correctness", "message": "x", "rationale": "y",
+            "confidence": 0.9,
+        }],
+        verdicts=[{"index": 0, "supported": False, "reason": "already handled"}],
+    )
+
+    await process_pull_request(EVENT, review_id, github_client=client, llm_client=model)
+
+    async with get_session_factory()() as session:
+        stored = await session.scalar(
+            select(func.count()).select_from(Finding).where(Finding.review_id == review_id)
+        )
+
+    assert stored == 0
+    status, _, _ = await review_row(review_id)
+    assert status == "no_findings"
+
+
+async def test_a_finding_the_judge_supports_is_posted():
+    review_id = await make_review()
+    client, _ = fake_github([[api_file("models.py", patch=PATCH)]])
+    model = fake_model(
+        findings=[{
+            "file": "models.py", "line": 18, "severity": "high",
+            "category": "correctness", "message": "x", "rationale": "y",
+            "confidence": 0.9,
+        }],
+        verdicts=[{"index": 0, "supported": True, "reason": "confirmed"}],
+    )
+
+    await process_pull_request(EVENT, review_id, github_client=client, llm_client=model)
+
+    status, _, _ = await review_row(review_id)
+    assert status == "posted"
