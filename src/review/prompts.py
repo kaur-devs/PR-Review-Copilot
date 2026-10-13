@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from src.classification.kinds import API, CONFIG, DEPENDENCY, LOGIC, SCHEMA, TEST
 from src.context.bundle import ContextBundle
 from src.diff.parse import FileDiff
@@ -61,9 +63,18 @@ QUESTIONS = {
 }
 
 
+def templates_enabled() -> bool:
+    return os.getenv("TEMPLATES_ENABLED", "1").lower() not in ("0", "false", "no", "off")
+
+
 def build_system_prompt(kind: str) -> str:
+    """The base prompt, plus questions chosen by the kind of change.
+
+    With templates switched off every change gets the same generic prompt,
+    which is how the evaluation harness measures whether they help.
+    """
     questions = QUESTIONS.get(kind)
-    if not questions:
+    if not questions or not templates_enabled():
         return BASE_SYSTEM
     return f"{BASE_SYSTEM}\n\n{questions}"
 

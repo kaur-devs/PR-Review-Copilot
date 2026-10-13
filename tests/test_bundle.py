@@ -152,3 +152,15 @@ def test_an_enormous_function_is_truncated(tmp_path, monkeypatch):
 
     assert "truncated" in result.items[0].snippet
     assert len(result.items[0].snippet.splitlines()) == 6
+
+
+async def test_context_can_be_switched_off_for_an_experiment(monkeypatch):
+    """Hypothesis H1: does connected-file context actually help?"""
+    from src.context.gather import gather_context
+
+    monkeypatch.setenv("CONTEXT_ENABLED", "0")
+
+    bundle = await gather_context("o/r", "abc123", 42, [])
+
+    assert bundle.items == []
+    assert bundle.symbols == []

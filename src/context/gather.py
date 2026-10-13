@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from src.context.bundle import STATUS_UNAVAILABLE, ContextBundle, assemble
 from src.context.references import find_references
@@ -15,6 +16,10 @@ from src.diff.parse import FileDiff
 logger = logging.getLogger(__name__)
 
 
+def context_enabled() -> bool:
+    return os.getenv("CONTEXT_ENABLED", "1").lower() not in ("0", "false", "no", "off")
+
+
 async def gather_context(
     repo_full_name: str,
     head_sha: str,
@@ -23,6 +28,10 @@ async def gather_context(
     *,
     client=None,
 ) -> ContextBundle:
+    if not context_enabled():
+        logger.info("connected-file context is switched off")
+        return ContextBundle()
+
     changed_paths = {diff.filename for diff in diffs}
 
     try:
