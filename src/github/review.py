@@ -15,13 +15,17 @@ MAX_COMMENTS_PER_REVIEW = 25
 
 
 @dataclass(frozen=True)
+class PostedComment:
+    file: str
+    line: int
+    comment_id: int
+
+
+@dataclass(frozen=True)
 class PostedReview:
     github_review_id: int
     html_url: str
-    comment_ids: dict[tuple[str, int], int] = field(default_factory=dict)
-
-    def id_for(self, finding: Finding) -> int | None:
-        return self.comment_ids.get((finding.file, finding.line))
+    comments: tuple[PostedComment, ...] = ()
 
 
 def build_comment_body(finding: Finding) -> str:
@@ -71,17 +75,33 @@ def build_comments(findings: list[Finding]) -> list[dict]:
     ]
 
 
-async def fetch_comment_ids(
+async def fetch_posted_comments(
     github: GitHubClient, repo_full_name: str, pr_number: int, review_id: int
-) -> dict[tuple[str, int], int]:
+) -> tuple[PostedComment, ...]:
+    """Find the comments GitHub created, with their line numbers.
+
+    Deliberately not /reviews/{id}/comments: that endpoint answers in the old
+    positional format, with line always null. This one reports line and side,
+    and says which review each comment belongs to.
+    """
     comments = await github.get_all_pages(
-        f"/repos/{repo_full_name}/pulls/{pr_number}/reviews/{review_id}/comments"
+        f"/repos/{repo_full_name}/pulls/{pr_number}/comments"
     )
-    return {
-        (comment["path"], comment["line"]): comment["id"]
+
+    ours = [
+        PostedComment(comment["path"], comment["line"], comment["id"])
         for comment in comments
-        if comment.get("line") is not None
-    }
+        if comment.get("pull_request_review_id") == review_id
+        and comment.get("line") is not None
+    ]
+
+    if not ours:
+        logger.warning(
+            "none of the %s comments on %s#%s belong to review %s",
+            len(comments), repo_full_name, pr_number, review_id,
+        )
+
+    return tuple(ours)
 
 
 async def post_review(
@@ -118,12 +138,12 @@ async def post_review(
         review_id, repo_full_name, pr_number, len(to_post),
     )
 
-    comment_ids = await fetch_comment_ids(
+    comments = await fetch_posted_comments(
         github, repo_full_name, pr_number, review_id
     )
 
     return PostedReview(
         github_review_id=review_id,
         html_url=response.get("html_url", ""),
-        comment_ids=comment_ids,
+        comments=comments,
     )

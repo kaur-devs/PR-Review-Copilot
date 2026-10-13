@@ -69,7 +69,13 @@ def fake_github(
 
         if request.url.path.endswith("/comments"):
             return httpx.Response(200, json=[
-                {"id": 7000 + n, "path": c["path"], "line": c["line"]}
+                {
+                    "id": 7000 + n,
+                    "path": c["path"],
+                    "line": c["line"],
+                    "side": c.get("side", "RIGHT"),
+                    "pull_request_review_id": 909090,
+                }
                 for n, c in enumerate(posted_comments)
             ])
 
@@ -135,7 +141,7 @@ def fake_model(
                 "verdicts": verdicts
                 if verdicts is not None
                 else [
-                    {"index": n, "supported": True, "reason": "looks right"}
+                    {"index": n, "verdict": "supported", "reason": "looks right"}
                     for n in range(len(findings or []))
                 ]
             }

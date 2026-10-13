@@ -178,10 +178,35 @@ async def test_the_comment_ids_are_fetched_afterwards():
         posted = await post_review(github, "o/r", 3, "a" * 40, [make(line=10)])
 
     assert posted.github_review_id == 909090
-    assert posted.comment_ids == {("app/models.py", 10): 7000}
+    assert [(c.file, c.line, c.comment_id) for c in posted.comments] == [
+        ("app/models.py", 10, 7000)
+    ]
 
     follow_up = [c for c in calls if c.url.path.endswith("/comments")]
     assert len(follow_up) == 1
+
+
+async def test_comments_from_another_review_are_not_claimed():
+    """Several reviews can exist on one pull request."""
+    import httpx
+
+    from src.github.review import fetch_posted_comments
+    from tests.fakes import token_response
+
+    def handle(request):
+        if request.url.path.endswith("/access_tokens"):
+            return token_response()
+        return httpx.Response(200, json=[
+            {"id": 1, "path": "a.py", "line": 5, "pull_request_review_id": 111},
+            {"id": 2, "path": "a.py", "line": 6, "pull_request_review_id": 909090},
+        ])
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    async with GitHubClient(42, client=client) as github:
+        found = await fetch_posted_comments(github, "o/r", 3, 909090)
+
+    assert [c.comment_id for c in found] == [2]
 
 
 # ---------------------------------------------------------------------------
@@ -189,13 +214,16 @@ async def test_the_comment_ids_are_fetched_afterwards():
 # ---------------------------------------------------------------------------
 
 async def test_posted_findings_are_marked_and_linked():
+    from src.github.review import PostedComment
+
     async with get_session_factory()() as session:
         repo_id = await ensure_repo(session, EVENT)
         review_id = await claim_review(session, repo_id, EVENT)
         await store_findings(session, review_id, [make(line=10), make(line=20)])
 
         matched = await record_posted_review(
-            session, review_id, 909090, {("app/models.py", 10): 7001}
+            session, review_id, 909090,
+            [PostedComment("app/models.py", 10, 7001)],
         )
 
         rows = (await session.execute(
@@ -210,3 +238,33 @@ async def test_posted_findings_are_marked_and_linked():
     assert matched == 1
     assert rows == [(10, True, 7001), (20, False, None)]
     assert review == 909090
+
+
+async def test_two_findings_on_the_same_line_each_get_their_own_comment():
+    """They would collapse into one if matched by lookup instead of in order."""
+    from sqlalchemy import select
+
+    from src.db.models import Finding as FindingRow
+    from src.github.review import PostedComment
+
+    async with get_session_factory()() as session:
+        repo_id = await ensure_repo(session, EVENT)
+        review_id = await claim_review(session, repo_id, EVENT)
+        await store_findings(session, review_id, [make(line=71), make(line=71)])
+
+        matched = await record_posted_review(
+            session, review_id, 909090,
+            [
+                PostedComment("app/models.py", 71, 8001),
+                PostedComment("app/models.py", 71, 8002),
+            ],
+        )
+
+        ids = (await session.execute(
+            select(FindingRow.github_comment_id)
+            .where(FindingRow.review_id == review_id)
+            .order_by(FindingRow.id)
+        )).scalars().all()
+
+    assert matched == 2
+    assert sorted(ids) == [8001, 8002]

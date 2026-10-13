@@ -216,9 +216,12 @@ async def record_posted_review(
     session: AsyncSession,
     review_id: int,
     github_review_id: int,
-    comment_ids: dict[tuple[str, int], int],
+    comments,
 ) -> int:
     """Link our findings to the comments GitHub created for them.
+
+    Matched one at a time rather than by lookup, because two findings can sit
+    on the same line and would otherwise collapse into one.
 
     The comment ids are what later tells us whether a developer resolved or
     dismissed each one, which is how the project measures whether it helps.
@@ -229,16 +232,26 @@ async def record_posted_review(
         .values(github_review_id=github_review_id)
     )
 
+    unclaimed = list(comments)
     matched = 0
+
     findings = (
         await session.execute(select(Finding).where(Finding.review_id == review_id))
     ).scalars().all()
 
     for finding in findings:
-        comment_id = comment_ids.get((finding.file, finding.line))
-        if comment_id is not None:
+        match = next(
+            (
+                comment
+                for comment in unclaimed
+                if comment.file == finding.file and comment.line == finding.line
+            ),
+            None,
+        )
+        if match is not None:
+            unclaimed.remove(match)
             finding.posted = True
-            finding.github_comment_id = comment_id
+            finding.github_comment_id = match.comment_id
             matched += 1
 
     await session.commit()

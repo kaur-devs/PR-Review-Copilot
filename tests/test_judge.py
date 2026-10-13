@@ -49,7 +49,7 @@ async def run(findings, client, context=None):
 
 async def test_a_supported_finding_survives():
     result = await run(
-        [make()], fake_judge([{"index": 0, "supported": True, "reason": "real"}])
+        [make()], fake_judge([{"index": 0, "verdict": "supported", "reason": "real"}])
     )
 
     assert len(result.kept) == 1
@@ -59,7 +59,7 @@ async def test_a_supported_finding_survives():
 async def test_an_unsupported_finding_is_dropped_with_a_reason():
     result = await run(
         [make()],
-        fake_judge([{"index": 0, "supported": False, "reason": "the code handles this"}]),
+        fake_judge([{"index": 0, "verdict": "contradicted", "reason": "the code handles this"}]),
     )
 
     assert result.kept == []
@@ -69,7 +69,7 @@ async def test_an_unsupported_finding_is_dropped_with_a_reason():
 async def test_a_mixed_batch_is_split():
     findings = [make(17), make(18), make(19)]
     result = await run(findings, fake_judge([
-        {"index": 0, "supported": True, "reason": "real"},
+        {"index": 0, "verdict": "supported", "reason": "real"},
         {"index": 1, "supported": False, "reason": "hypothetical"},
         {"index": 2, "supported": True, "reason": "real"},
     ]))
@@ -106,7 +106,7 @@ async def test_an_unusable_answer_keeps_everything():
 async def test_a_finding_the_judge_skipped_is_kept():
     findings = [make(17), make(18)]
     result = await run(findings, fake_judge([
-        {"index": 0, "supported": False, "reason": "no"},
+        {"index": 0, "verdict": "contradicted", "reason": "no"},
     ]))
 
     assert [f.line for f in result.kept] == [18]
@@ -114,7 +114,7 @@ async def test_a_finding_the_judge_skipped_is_kept():
 
 async def test_an_index_we_never_sent_is_ignored():
     result = await run([make()], fake_judge([
-        {"index": 0, "supported": True, "reason": "real"},
+        {"index": 0, "verdict": "supported", "reason": "real"},
         {"index": 99, "supported": False, "reason": "invented"},
     ]))
 
@@ -183,3 +183,91 @@ def test_findings_are_numbered_so_verdicts_can_be_matched_back():
 
     assert "[0]" in prompt
     assert "[1]" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Abstaining rather than deleting
+# ---------------------------------------------------------------------------
+
+async def test_a_finding_the_judge_cannot_check_is_kept():
+    """The failure that cost us a true finding: not seeing the callers is not
+    evidence that there are none."""
+    result = await run([make()], fake_judge([
+        {"index": 0, "verdict": "unverifiable", "reason": "the callers were not shown"},
+    ]))
+
+    assert len(result.kept) == 1
+    assert result.rejected == []
+    assert len(result.unverified) == 1
+
+
+async def test_an_unverifiable_finding_is_trusted_less():
+    result = await run([make()], fake_judge([
+        {"index": 0, "verdict": "unverifiable", "reason": "cannot tell"},
+    ]))
+
+    assert result.kept[0].confidence == 0.63
+
+
+async def test_a_weak_unverifiable_finding_falls_below_the_posting_floor():
+    """0.8 becomes 0.56, under the gate's 0.6, so it is stored but not posted."""
+    from src.filter.gate import apply_gate
+
+    finding = Finding(
+        file="app/models.py", line=18, severity="high", category="correctness",
+        message="m", rationale="r", confidence=0.8,
+    )
+    result = await run([finding], fake_judge([
+        {"index": 0, "verdict": "unverifiable", "reason": "cannot tell"},
+    ]))
+
+    assert result.kept[0].confidence == 0.56
+    assert apply_gate(result.kept).post == []
+
+
+async def test_a_strong_unverifiable_finding_still_posts():
+    from src.filter.gate import apply_gate
+
+    result = await run([make()], fake_judge([
+        {"index": 0, "verdict": "unverifiable", "reason": "cannot tell"},
+    ]))
+
+    assert len(apply_gate(result.kept).post) == 1
+
+
+async def test_only_contradiction_deletes_a_finding():
+    findings = [make(17), make(18), make(19)]
+    result = await run(findings, fake_judge([
+        {"index": 0, "verdict": "supported", "reason": "a"},
+        {"index": 1, "verdict": "unverifiable", "reason": "b"},
+        {"index": 2, "verdict": "contradicted", "reason": "c"},
+    ]))
+
+    assert [f.line for f in result.kept] == [17, 18]
+    assert [f.line for f, _ in result.rejected] == [19]
+
+
+async def test_an_unreadable_verdict_abstains_rather_than_deleting():
+    result = await run([make()], fake_judge([
+        {"index": 0, "verdict": "maybe?", "reason": "unclear"},
+    ]))
+
+    assert len(result.kept) == 1
+    assert result.rejected == []
+
+
+async def test_the_older_true_false_shape_is_still_understood():
+    result = await run([make()], fake_judge([
+        {"index": 0, "supported": False, "reason": "old wording"},
+    ]))
+
+    assert result.rejected
+    assert result.kept == []
+
+
+def test_the_prompt_tells_the_judge_not_to_reject_on_absence():
+    from src.judge.prompts import SYSTEM
+
+    assert "unverifiable" in SYSTEM
+    assert "Not seeing the callers is not evidence" in SYSTEM
+    assert "deletes the finding" in SYSTEM

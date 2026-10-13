@@ -160,8 +160,13 @@ async def review_pull_request(
         else "not run",
     )
     for finding, reason in outcome.judged.rejected:
-        trace.item(f"rejected  {finding.file}:{finding.line}  {reason}")
+        trace.item(f"contradicted  {finding.file}:{finding.line}  {reason}")
         trace.item(f"would have said: {finding.message}", level=2)
+    for finding, reason in outcome.judged.unverified:
+        trace.item(
+            f"unverifiable  {finding.file}:{finding.line}  "
+            f"kept at {finding.confidence}  {reason}"
+        )
 
     outcome.findings = outcome.judged.kept
     outcome.model_calls = quota.requests - calls_before

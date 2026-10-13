@@ -129,7 +129,7 @@ async def _record_and_post(
         return
 
     matched = await record_posted_review(
-        session, review_id, posted.github_review_id, posted.comment_ids
+        session, review_id, posted.github_review_id, posted.comments
     )
 
     await set_review_status(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from src.context.bundle import ContextBundle
 from src.diff.parse import FileDiff
@@ -13,6 +13,16 @@ from src.review.provider import LLMError, LLMProvider
 logger = logging.getLogger(__name__)
 
 DEFAULT_JUDGE_MODEL = "qwen/qwen3.8-27b"
+
+SUPPORTED = "supported"
+CONTRADICTED = "contradicted"
+UNVERIFIABLE = "unverifiable"
+VERDICTS = frozenset({SUPPORTED, CONTRADICTED, UNVERIFIABLE})
+
+# A finding the judge could not check is kept, but trusted less. At the gate's
+# floor of 0.6 this means a strong finding still posts and a middling one does
+# not, rather than everything surviving or nothing.
+UNVERIFIABLE_PENALTY = 0.7
 
 
 def judge_enabled() -> bool:
@@ -27,17 +37,22 @@ def judge_model_name() -> str:
 class JudgeResult:
     kept: list[Finding] = field(default_factory=list)
     rejected: list[tuple[Finding, str]] = field(default_factory=list)
+    unverified: list[tuple[Finding, str]] = field(default_factory=list)
     ran: bool = True
 
     @property
     def summary(self) -> str:
         if not self.ran:
             return "not run"
-        return f"{len(self.kept)} supported, {len(self.rejected)} rejected"
+        return (
+            f"{len(self.kept) - len(self.unverified)} supported, "
+            f"{len(self.unverified)} unverifiable, "
+            f"{len(self.rejected)} contradicted"
+        )
 
 
-def _read_verdicts(answer: dict, count: int) -> dict[int, tuple[bool, str]]:
-    verdicts: dict[int, tuple[bool, str]] = {}
+def _read_verdicts(answer: dict, count: int) -> dict[int, tuple[str, str]]:
+    verdicts: dict[int, tuple[str, str]] = {}
 
     raw = answer.get("verdicts")
     if not isinstance(raw, list):
@@ -47,17 +62,27 @@ def _read_verdicts(answer: dict, count: int) -> dict[int, tuple[bool, str]]:
     for entry in raw:
         if not isinstance(entry, dict):
             continue
+
         try:
             index = int(entry.get("index"))
         except (TypeError, ValueError):
             continue
+
         if not 0 <= index < count:
             logger.info("the judge returned an index we did not ask about: %s", index)
             continue
-        verdicts[index] = (
-            bool(entry.get("supported")),
-            str(entry.get("reason", ""))[:200],
-        )
+
+        verdict = entry.get("verdict")
+
+        # Older wording, and a safety net if the model answers yes or no.
+        if verdict not in VERDICTS:
+            if "supported" in entry:
+                verdict = SUPPORTED if entry["supported"] else CONTRADICTED
+            else:
+                logger.info("unreadable verdict for index %s: %r", index, verdict)
+                verdict = UNVERIFIABLE
+
+        verdicts[index] = (verdict, str(entry.get("reason", ""))[:200])
 
     return verdicts
 
@@ -107,11 +132,22 @@ async def judge_findings(
 
     result = JudgeResult()
     for index, finding in enumerate(findings):
-        supported, reason = verdicts.get(index, (True, "the judge did not say"))
-        if supported:
-            result.kept.append(finding)
-        else:
+        verdict, reason = verdicts.get(index, (SUPPORTED, "the judge did not say"))
+
+        if verdict == CONTRADICTED:
             result.rejected.append((finding, reason))
+            continue
+
+        if verdict == UNVERIFIABLE:
+            weakened = replace(
+                finding,
+                confidence=round(finding.confidence * UNVERIFIABLE_PENALTY, 2),
+            )
+            result.kept.append(weakened)
+            result.unverified.append((weakened, reason))
+            continue
+
+        result.kept.append(finding)
 
     logger.info(
         "judge (%s): %s", judge_model_name(), result.summary

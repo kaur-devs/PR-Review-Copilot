@@ -4,24 +4,33 @@ from src.context.bundle import ContextBundle
 from src.diff.parse import FileDiff
 from src.review.findings import Finding
 
-SYSTEM = """You check whether review findings are actually supported by the code.
+SYSTEM = """You check whether review findings are supported by the code.
 
 Another reviewer produced these findings. Some are real. Some are plausible
-guesses, restatements of what the code does, or concerns about situations the
-code does not actually create. Your job is to tell them apart.
+guesses or restatements of what the code does. Your job is to tell them apart.
+
+You are shown the changed code, and sometimes other code from the repository.
+You are NOT shown the whole repository. That distinction matters.
 
 Reply with JSON only:
 
-{"verdicts": [{"index": <number>, "supported": true/false, "reason": "<one sentence>"}]}
+{"verdicts": [{"index": <number>, "verdict": "<supported|contradicted|unverifiable>", "reason": "<one sentence>"}]}
 
-Mark a finding supported when you can point at the specific code that makes
-it true.
+Use "supported" when you can point at specific code that makes the finding
+true.
 
-Mark it unsupported when:
-- the code does not do what the finding claims
-- the concern is hypothetical and nothing in the code shown creates it
-- it describes what the code does without identifying a problem
-- the problem it describes is already handled elsewhere in the code shown
+Use "contradicted" when the code you have been shown proves the finding
+wrong: the code does not do what it claims, or the problem is already
+handled in code you can see.
+
+Use "unverifiable" when you simply cannot tell from what you were given. In
+particular, use it when a finding says a change will affect code elsewhere
+and that code was not shown to you. Not seeing the callers is not evidence
+that there are none.
+
+Choosing "contradicted" deletes the finding, so a developer never sees it.
+Only choose it when you have positive evidence, never because something is
+absent from what you were shown.
 
 Return a verdict for every index you are given. Do not invent indexes."""
 
