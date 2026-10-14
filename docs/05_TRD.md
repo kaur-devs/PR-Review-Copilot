@@ -3,7 +3,7 @@
 ## Proposed Architecture
 - **Backend:** Python + FastAPI
 - **GitHub integration:** GitHub App (webhooks + REST API), scoped permissions
-- **LLM:** Free-tier hosted providers (Gemini / GitHub Models / Groq / Cerebras / Mistral), reached through a provider-agnostic adapter
+- **LLM:** Groq free tier, `openai/gpt-oss-120b` for generation and `qwen/qwen3.8-27b` for the judge, reached through a provider-agnostic adapter speaking the OpenAI-compatible format. Swapping provider is three environment variables. See ADR-003.
 - **Diff parsing:** `unidiff`
 - **Database:** PostgreSQL (Supabase free tier)
 - **Hosting:** Render (free tier)
