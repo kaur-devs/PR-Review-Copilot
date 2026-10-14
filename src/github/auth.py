@@ -88,8 +88,8 @@ class InstallationToken:
         return datetime.now(timezone.utc) + REFRESH_WHEN_UNDER < self.expires_at
 
 
-# Tokens we have already fetched, kept by installation id so we are not
-# asking GitHub for a new one on every single request.
+# Kept per installation so a review does not re-sign and re-trade a token
+# on every single request.
 _token_cache: dict[int, InstallationToken] = {}
 
 
@@ -109,7 +109,6 @@ async def fetch_installation_token(
     url = f"{GITHUB_API}/app/installations/{installation_id}/access_tokens"
     headers = {**API_HEADERS, "Authorization": f"Bearer {build_app_jwt()}"}
 
-    # If we were not given a client, make one and close it afterwards.
     we_made_the_client = client is None
     if we_made_the_client:
         client = httpx.AsyncClient(timeout=10.0)

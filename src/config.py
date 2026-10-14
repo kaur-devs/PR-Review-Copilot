@@ -21,7 +21,6 @@ from dotenv import load_dotenv
 # win, which is how deployment overrides local development.
 load_dotenv()
 
-# The service cannot start without these.
 REQUIRED_VARS = (
     "GITHUB_WEBHOOK_SECRET",
     "GITHUB_APP_ID",
@@ -39,19 +38,15 @@ class Settings:
     the code can quietly rewrite a secret.
     """
 
-    # Shared password between us and GitHub, used to prove a webhook is real.
     webhook_secret: str
 
-    # Numeric id of our GitHub App.
     app_id: str
 
-    # Used when we sign a token to prove we are the App.
+    # The issuer claim when we sign a token proving we are the App.
     client_id: str
 
-    # Where the App's private key file sits on disk.
     private_key_path: Path
 
-    # How to reach PostgreSQL.
     database_url: str
 
     def read_private_key(self) -> str:
