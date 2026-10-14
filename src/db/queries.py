@@ -51,9 +51,9 @@ async def record_delivery(
             pr_number=pull_request.pr_number if pull_request else None,
             head_sha=pull_request.head_sha if pull_request else None,
         )
-        # If a row with this delivery_id already exists, change nothing.
         .on_conflict_do_nothing(index_elements=["delivery_id"])
-        # Give us back the id, but only if we actually inserted something.
+        # Returns nothing when the insert was refused, which is how the caller
+        # learns it lost the race.
         .returning(WebhookEvent.id)
     )
     result = await session.execute(statement)
@@ -84,7 +84,6 @@ async def ensure_repo(session: AsyncSession, pull_request: PullRequestEvent) -> 
     a repository can be renamed. If the name has changed since we last saw it,
     we update our copy.
     """
-    # The installation. If we already know about it, leave it alone.
     await session.execute(
         insert(Installation)
         .values(

@@ -7,7 +7,6 @@ from fastapi import FastAPI
 from src.config import get_settings
 from src.webhooks.router import router as webhook_router
 
-# Log to the terminal with a readable timestamp.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-7s %(name)s  %(message)s",

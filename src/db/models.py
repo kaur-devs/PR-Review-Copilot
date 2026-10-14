@@ -36,32 +36,20 @@ class Base(DeclarativeBase):
     """Every table inherits from this. Alembic reads it to see the schema."""
 
 
-# The stages a review moves through. Written down here so the database itself
-# rejects a typo rather than storing a status nothing understands.
-#
-#   received     we know about the commit, nothing has started
-#   processing   the pipeline is working on it
-#   posting      findings are being sent to GitHub
-#   posted       comments are live on the pull request
-#   skipped      nothing worth reviewing, e.g. only lockfiles changed
-#   no_findings  we looked and found nothing to say
-#   superseded   newer commits arrived, this review no longer matters
-#   failed       something broke; error_code says what
+# Listed here so the database rejects a typo rather than storing a status
+# nothing understands. "superseded" means newer commits arrived and this
+# review no longer matters; "skipped" means there was nothing worth reviewing.
 REVIEW_STATUSES = (
     "received", "processing", "posting", "posted",
     "skipped", "no_findings", "superseded", "failed",
 )
 
-# What we did with a delivery from GitHub.
-#   accepted   we started a review
-#   duplicate  we had already seen this message, or already had this commit
-#   ignored    a real message, but nothing to review
+# "duplicate" covers both seeing the same message twice and already holding
+# the same commit. "ignored" is a real message with nothing to review.
 DELIVERY_OUTCOMES = ("accepted", "duplicate", "ignored")
 
-# How much surrounding code we managed to gather for a review.
-#   ok           we downloaded the repository and read it successfully
-#   degraded     some files would not parse, so we used weaker matching
-#   unavailable  we could not download the code and reviewed the diff alone
+# "degraded" means some files would not parse and weaker matching was used.
+# "unavailable" means the repository could not be downloaded at all.
 CONTEXT_STATUSES = ("ok", "degraded", "unavailable")
 
 
@@ -72,11 +60,8 @@ class Installation(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
-    # GitHub's own id for the installation. We need it to ask for permission
-    # to read their code.
     github_installation_id: Mapped[int] = mapped_column(BigInteger, unique=True)
 
-    # The username or organisation name, e.g. "kaur-devs".
     account_login: Mapped[str] = mapped_column(String(255))
 
     installed_at: Mapped[datetime] = mapped_column(
@@ -101,8 +86,7 @@ class Repo(Base):
     # can be renamed at any time; its number never changes.
     github_repo_id: Mapped[int] = mapped_column(BigInteger, unique=True)
 
-    # For example "kaur-devs/pr-review-sandbox". Kept for readability in
-    # logs and the dashboard, and refreshed whenever we see a new name.
+    # Refreshed whenever we see a new name, since repositories get renamed.
     full_name: Mapped[str] = mapped_column(String(512))
 
     default_branch: Mapped[str] = mapped_column(String(255), default="main")
@@ -127,7 +111,6 @@ class Review(Base):
         UniqueConstraint(
             "repo_id", "pr_number", "head_sha", name="uq_reviews_repo_pr_head"
         ),
-        # Reject a status that is not in our list.
         CheckConstraint("status IN " + str(REVIEW_STATUSES), name="ck_reviews_status"),
         CheckConstraint(
             "context_status IS NULL OR context_status IN " + str(CONTEXT_STATUSES),
@@ -155,10 +138,8 @@ class Review(Base):
     # Filled in only when status is "failed".
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    # How much surrounding code we managed to gather.
     context_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
-    # GitHub's id for the review we posted, once it accepts one.
     github_review_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -208,7 +189,6 @@ class WebhookEvent(Base):
 
     outcome: Mapped[str] = mapped_column(String(16))
 
-    # The review this message started, if it started one.
     review_id: Mapped[int | None] = mapped_column(
         ForeignKey("reviews.id", ondelete="SET NULL"), nullable=True
     )
@@ -234,7 +214,6 @@ class Finding(Base):
     severity: Mapped[str] = mapped_column(String(32))
     category: Mapped[str] = mapped_column(String(64))
 
-    # The explanation shown to the developer.
     rationale: Mapped[str] = mapped_column(Text)
 
     # How sure we are, between 0 and 1. Findings below a threshold are kept

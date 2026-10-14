@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Headers GitHub sends with every delivery.
 EVENT_HEADER = "X-GitHub-Event"        # what kind of event, e.g. pull_request
 DELIVERY_HEADER = "X-GitHub-Delivery"  # a unique id for this message
 
@@ -69,7 +68,6 @@ async def receive_github_webhook(
     # different bytes, so the signature check would always fail.
     raw_body = await request.body()
 
-    # Step 1: is this really from GitHub?
     signature = request.headers.get(SIGNATURE_HEADER)
     if not is_valid_signature(raw_body, signature, get_settings().webhook_secret):
         # Vague on purpose. Anyone can send us a message, and someone trying
@@ -79,7 +77,6 @@ async def receive_github_webhook(
             401, "WEBHOOK_SIGNATURE_INVALID", "The request could not be verified."
         )
 
-    # Step 2: does it have the headers we need?
     event = request.headers.get(EVENT_HEADER)
     delivery_id = request.headers.get(DELIVERY_HEADER)
     if not event or not delivery_id:
@@ -87,7 +84,6 @@ async def receive_github_webhook(
             400, "WEBHOOK_HEADERS_MISSING", "Required GitHub headers are absent."
         )
 
-    # Step 3: can we read the body?
     try:
         payload = json.loads(raw_body)
     except json.JSONDecodeError:
@@ -95,9 +91,8 @@ async def receive_github_webhook(
             400, "WEBHOOK_PAYLOAD_MALFORMED", "The request body is not valid JSON."
         )
 
-    # Step 4: is this something we review? If it is, pull out the fields we
-    # need. We do this before writing anything, so the row we write already
-    # knows what we decided.
+    # Decided before anything is written, so the row we store already knows
+    # the outcome.
     action = payload.get("action")
 
     # A developer resolved or reopened one of our comment threads. Cheap to
@@ -115,8 +110,6 @@ async def receive_github_webhook(
                 400, "WEBHOOK_PAYLOAD_INCOMPLETE", f"Payload is missing {missing}."
             )
 
-    # Step 5: write down that we received it. If this message has been seen
-    # before, we get nothing back and stop here.
     delivery_row_id = await record_delivery(
         session,
         delivery_id=delivery_id,
@@ -134,9 +127,8 @@ async def receive_github_webhook(
         logger.info("ignoring %s/%s (delivery %s)", event, action, delivery_id)
         return accepted("ignored", event=event, action=action)
 
-    # Step 6: claim the commit. A different message may have claimed it
-    # already, for example when a pull request is reopened without any new
-    # code being pushed.
+    # A different message may have claimed this commit already, for example
+    # a pull request reopened with no new code pushed.
     repo_id = await ensure_repo(session, pull_request)
     review_id = await claim_review(session, repo_id, pull_request)
 
@@ -147,11 +139,10 @@ async def receive_github_webhook(
         logger.info("commit %s is already being reviewed", pull_request.head_sha[:7])
         return accepted("duplicate", reason="commit already claimed")
 
-    # Link the message to the review it started.
     await update_delivery(session, delivery_row_id, review_id=review_id)
 
-    # Step 7: hand the work off. A background task runs after this reply has
-    # been sent, which is what keeps us inside GitHub's ten second limit.
+    # Runs after the reply has been sent, which is what keeps us inside
+    # GitHub's ten second limit.
     background_tasks.add_task(process_pull_request, pull_request, review_id)
 
     logger.info(

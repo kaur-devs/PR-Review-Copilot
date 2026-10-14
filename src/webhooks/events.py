@@ -9,18 +9,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-# The only event type we review.
 PULL_REQUEST_EVENT = "pull_request"
 
-# A pull request event also carries an "action" saying what happened. These
-# four mean there is new code to look at:
-#
-#   opened            someone created the pull request
-#   synchronize       someone pushed more commits to it
-#   reopened          a closed pull request was reopened
-#   ready_for_review  a draft became a real pull request
-#
-# Everything else (labelled, assigned, commented on, closed) changes no code.
+# The four actions that mean new code exists. "synchronize" is GitHub's name
+# for more commits being pushed. Everything else, such as labelling or
+# assigning, changes no code.
 ACTIONS_WE_REVIEW = frozenset(
     {"opened", "synchronize", "reopened", "ready_for_review"}
 )
@@ -45,27 +38,22 @@ class PullRequestEvent:
     # GitHub's unique id for this delivery. Used to spot the same message twice.
     delivery_id: str
 
-    # What happened: opened, synchronize, and so on.
     action: str
 
-    # Which installation of our App this came from. Needed to get permission
-    # to read the code.
+    # Needed to get permission to read the code.
     installation_id: int
 
     # GitHub's numeric id for the repository. We key on this rather than the
     # name, because a repository can be renamed and its id cannot change.
     repo_id: int
 
-    # For example "kaur-devs/pr-review-sandbox".
     repo_full_name: str
 
-    # The pull request number shown in the GitHub interface.
     pr_number: int
 
-    # The newest commit on the pull request. This is the code we review.
+    # The newest commit: the code we review.
     head_sha: str
 
-    # The commit the pull request branches from. Needed to work out the diff.
     base_sha: str
 
     @classmethod
