@@ -1,0 +1,79 @@
+{
+  "runs": [
+    {
+      "label": "H0 full pipeline",
+      "recall": 0.625,
+      "precision": 0.8333333333333334,
+      "f1": 0.7142857142857143,
+      "context_recall": 0.5,
+      "model_calls": 11,
+      "errors": 0,
+      "cases": [
+        {
+          "id": "retriever-renamed-keys",
+          "matched": 1,
+          "missed": [
+            "backend/app/services/retriever.py:116 (renamed keys break chat.py, which was not changed)"
+          ],
+          "extra": [],
+          "context_found": [
+            "backend/app/routers/chat.py"
+          ],
+          "context_missed": [],
+          "model_calls": 3,
+          "seconds": 8.3,
+          "error": null
+        },
+        {
+          "id": "embedder-return-shape",
+          "matched": 1,
+          "missed": [],
+          "extra": [
+            "backend/app/routers/repos.py:102 Changed embed_texts return signature to a tuple but other callers may still expect a single value"
+          ],
+          "context_found": [
+            "backend/app/services/retriever.py"
+          ],
+          "context_missed": [
+            "backend/app/routers/repos.py"
+          ],
+          "model_calls": 4,
+          "seconds": 10.8,
+          "error": null
+        },
+        {
+          "id": "embedder-blocking-sleep",
+          "matched": 0,
+          "missed": [
+            "backend/app/services/embedder.py:29 (time.sleep blocks the event loop)",
+            "backend/app/services/embedder.py:42 (time.sleep(21) between batches)"
+          ],
+          "extra": [],
+          "context_found": [
+            "backend/app/routers/repos.py",
+            "backend/app/services/retriever.py"
+          ],
+          "context_missed": [],
+          "model_calls": 1,
+          "seconds": 23.3,
+          "error": null
+        },
+        {
+          "id": "chunker-rename",
+          "matched": 3,
+          "missed": [],
+          "extra": [],
+          "context_found": [],
+          "context_missed": [
+            "backend/app/routers/repos.py",
+            "backend/app/services/retriever.py",
+            "backend/app/services/llm.py"
+          ],
+          "model_calls": 3,
+          "seconds": 6.0,
+          "error": null
+        }
+      ]
+    }
+  ]
+}

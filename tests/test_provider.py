@@ -120,13 +120,15 @@ async def test_rate_limiting_is_retried():
 
 
 async def test_giving_up_on_rate_limiting_says_so():
-    client, calls = fake_model(statuses=[429, 429, 429])
+    from src.review.provider import MAX_ATTEMPTS
+
+    client, calls = fake_model(statuses=[429] * MAX_ATTEMPTS)
 
     async with make(client) as model:
         with pytest.raises(RateLimited):
             await model.complete("s", "u")
 
-    assert len(calls) == 3
+    assert len(calls) == MAX_ATTEMPTS
 
 
 async def test_a_server_error_is_retried():
@@ -195,3 +197,146 @@ def test_the_provider_is_three_environment_variables(monkeypatch):
 
     assert model.base_url == "https://openrouter.ai/api/v1"
     assert model.model == "something/else:free"
+
+
+# ---------------------------------------------------------------------------
+# Living inside a tokens-per-minute budget
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def forget_rate_limit_state():
+    from src.review.provider import rate_limit
+
+    rate_limit.remaining_tokens = None
+    rate_limit.reset_in = 0.0
+    rate_limit.seen_at = 0.0
+    yield
+    rate_limit.remaining_tokens = None
+
+
+def test_groq_duration_format_is_understood():
+    from src.review.provider import parse_duration
+
+    assert parse_duration("7.66s") == 7.66
+    assert parse_duration("2m59.56s") == 179.56
+    assert parse_duration("1h3m") == 3780.0
+    assert parse_duration(None) == 0.0
+    assert parse_duration("nonsense") == 0.0
+
+
+def model_with_headers(remaining, reset, *, status=200, retry_after=None, record=None):
+    def handle(request: httpx.Request) -> httpx.Response:
+        if record is not None:
+            record.append(request)
+        headers = {
+            "x-ratelimit-remaining-tokens": str(remaining),
+            "x-ratelimit-reset-tokens": reset,
+        }
+        if retry_after:
+            headers["retry-after"] = retry_after
+        if status != 200:
+            return httpx.Response(status, json={"error": "no"}, headers=headers)
+        return httpx.Response(200, headers=headers, json={
+            "model": "m",
+            "choices": [{"message": {"content": "hi"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        })
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+
+async def test_the_remaining_token_budget_is_remembered():
+    from src.review.provider import rate_limit
+
+    async with make(model_with_headers(5500, "41.2s")) as model:
+        await model.complete("s", "u")
+
+    assert rate_limit.remaining_tokens == 5500
+    assert rate_limit.reset_in == 41.2
+
+
+async def test_we_wait_when_the_next_request_will_not_fit(monkeypatch):
+    """Better to pause than to be refused and retry blindly."""
+    from src.review import provider
+
+    waits = []
+
+    async def record_sleep(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(provider.asyncio, "sleep", record_sleep)
+
+    async with make(model_with_headers(100, "30s")) as model:
+        await model.complete("s", "u")
+        await model.complete("x" * 4000, "y" * 4000)
+
+    assert waits
+    assert 0 < waits[0] <= 30
+
+
+async def test_we_do_not_wait_when_there_is_room(monkeypatch):
+    from src.review import provider
+
+    waits = []
+
+    async def record_sleep(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(provider.asyncio, "sleep", record_sleep)
+
+    async with make(model_with_headers(7900, "50s")) as model:
+        await model.complete("s", "u")
+        await model.complete("short", "short")
+
+    assert waits == []
+
+
+async def test_the_provider_is_obeyed_when_it_says_how_long_to_wait(monkeypatch):
+    """Guessing is how a retry lands inside the same closed window."""
+    from src.review import provider
+
+    waits = []
+
+    async def record_sleep(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(provider.asyncio, "sleep", record_sleep)
+
+    client = model_with_headers(0, "25s", status=429, retry_after="23")
+
+    async with make(client) as model:
+        with pytest.raises(RateLimited):
+            await model.complete("s", "u")
+
+    assert 23.0 in waits
+
+
+async def test_a_wait_is_never_longer_than_the_cap(monkeypatch):
+    from src.review import provider
+
+    waits = []
+
+    async def record_sleep(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(provider.asyncio, "sleep", record_sleep)
+
+    client = model_with_headers(0, "10m", status=429, retry_after="600")
+
+    async with make(client) as model:
+        with pytest.raises(RateLimited):
+            await model.complete("s", "u")
+
+    assert max(waits) <= provider.MAX_WAIT_SECONDS
+
+
+async def test_time_spent_waiting_is_counted():
+    from src.review.provider import quota
+
+    client = model_with_headers(0, "5s", status=429, retry_after="5")
+
+    async with make(client) as model:
+        with pytest.raises(RateLimited):
+            await model.complete("s", "u")
+
+    assert quota.waited_seconds > 0

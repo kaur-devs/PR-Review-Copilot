@@ -1,0 +1,77 @@
+{
+  "runs": [
+    {
+      "label": "H0 full pipeline",
+      "recall": 0.875,
+      "precision": 0.7777777777777778,
+      "f1": 0.823529411764706,
+      "context_recall": 0.5,
+      "model_calls": 14,
+      "errors": 0,
+      "cases": [
+        {
+          "id": "retriever-renamed-keys",
+          "matched": 2,
+          "missed": [],
+          "extra": [],
+          "context_found": [
+            "backend/app/routers/chat.py"
+          ],
+          "context_missed": [],
+          "model_calls": 3,
+          "seconds": 6.6,
+          "error": null
+        },
+        {
+          "id": "embedder-return-shape",
+          "matched": 1,
+          "missed": [],
+          "extra": [],
+          "context_found": [
+            "backend/app/services/retriever.py"
+          ],
+          "context_missed": [
+            "backend/app/routers/repos.py"
+          ],
+          "model_calls": 4,
+          "seconds": 75.3,
+          "error": null
+        },
+        {
+          "id": "embedder-blocking-sleep",
+          "matched": 1,
+          "missed": [
+            "backend/app/services/embedder.py:29 (time.sleep blocks the event loop)"
+          ],
+          "extra": [
+            "backend/app/config.py:12 Changed default GitHub redirect URI may break existing deployments",
+            "backend/app/config.py:27 Default LLM model changed, altering runtime behavior"
+          ],
+          "context_found": [
+            "backend/app/routers/repos.py",
+            "backend/app/services/retriever.py"
+          ],
+          "context_missed": [],
+          "model_calls": 4,
+          "seconds": 66.6,
+          "error": null
+        },
+        {
+          "id": "chunker-rename",
+          "matched": 3,
+          "missed": [],
+          "extra": [],
+          "context_found": [],
+          "context_missed": [
+            "backend/app/routers/repos.py",
+            "backend/app/services/retriever.py",
+            "backend/app/services/llm.py"
+          ],
+          "model_calls": 3,
+          "seconds": 5.5,
+          "error": null
+        }
+      ]
+    }
+  ]
+}

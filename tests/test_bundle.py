@@ -140,7 +140,7 @@ def test_an_empty_bundle_is_valid(snapshot):
     assert bundle.status == STATUS_OK
 
 
-def test_an_enormous_function_is_truncated(tmp_path, monkeypatch):
+def test_an_enormous_function_is_trimmed_around_the_reference(tmp_path, monkeypatch):
     from src.context import bundle as bundle_module
 
     monkeypatch.setattr(bundle_module, "MAX_SNIPPET_LINES", 5)
@@ -150,8 +150,10 @@ def test_an_enormous_function_is_truncated(tmp_path, monkeypatch):
 
     result = assemble(snapshot, [ref("big.py", 3)])
 
-    assert "truncated" in result.items[0].snippet
-    assert len(result.items[0].snippet.splitlines()) == 6
+    item = result.items[0]
+    assert "later lines" in item.snippet
+    assert "line_1 = 1" in item.snippet
+    assert item.start_line <= 3 <= item.end_line
 
 
 async def test_context_can_be_switched_off_for_an_experiment(monkeypatch):
@@ -164,3 +166,40 @@ async def test_context_can_be_switched_off_for_an_experiment(monkeypatch):
 
     assert bundle.items == []
     assert bundle.symbols == []
+
+
+def test_a_long_function_keeps_the_code_around_the_reference(tmp_path, monkeypatch):
+    """Trimming from the top gives you the setup and loses the payload.
+
+    This is the bug that cost a true finding: the lines reading the renamed
+    keys sat one line past the cut, so the judge correctly said it could not
+    see them.
+    """
+    from src.context import bundle as bundle_module
+
+    monkeypatch.setattr(bundle_module, "MAX_SNIPPET_LINES", 20)
+
+    body = [f"    setup_{n} = {n}" for n in range(30)]
+    body.append("    result = retrieve_context()")
+    body.extend(f"    use_{n} = result['key_{n}']" for n in range(10))
+    (tmp_path / "caller.py").write_text("def handler():\n" + "\n".join(body) + "\n")
+
+    snapshot = Snapshot(tmp_path, "o/r", "abc")
+    reference_line = 32
+
+    item = assemble(
+        snapshot,
+        [ref("caller.py", reference_line, confidence=0.9)],
+    ).items[0]
+
+    assert "retrieve_context()" in item.snippet
+    assert "use_0 = result['key_0']" in item.snippet
+    assert "earlier lines" in item.snippet
+
+
+def test_a_short_function_is_not_trimmed_at_all(snapshot):
+    item = assemble(snapshot, [ref("app/service.py", 5)]).items[0]
+
+    assert "earlier lines" not in item.snippet
+    assert "later lines" not in item.snippet
+    assert item.start_line == 4

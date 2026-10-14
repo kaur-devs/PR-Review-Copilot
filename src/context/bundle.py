@@ -66,6 +66,13 @@ class ContextBundle:
 
 
 def _snippet_around(snapshot: Snapshot, path: str, line: int) -> tuple[int, int, str]:
+    """The enclosing function, trimmed around the reference if it is too long.
+
+    A long function trimmed from its first line gives you the setup and throws
+    away the part that matters. What a reviewer needs is the code around the
+    reference, and especially what happens to the value afterwards, so the
+    window is centred on the reference and leans forward.
+    """
     source = snapshot.read(path)
     lines = source.decode("utf-8", "replace").splitlines()
 
@@ -78,13 +85,23 @@ def _snippet_around(snapshot: Snapshot, path: str, line: int) -> tuple[int, int,
         start = max(1, line - FALLBACK_PADDING)
         end = min(len(lines), line + FALLBACK_PADDING)
 
-    if end - start + 1 > MAX_SNIPPET_LINES:
-        end = start + MAX_SNIPPET_LINES - 1
-        body = lines[start - 1 : end] + ["    # ... truncated"]
-    else:
-        body = lines[start - 1 : end]
+    if end - start + 1 <= MAX_SNIPPET_LINES:
+        return start, end, "\n".join(lines[start - 1 : end])
 
-    return start, end, "\n".join(body)
+    before = MAX_SNIPPET_LINES // 3
+    window_start = max(start, line - before)
+    window_end = min(end, window_start + MAX_SNIPPET_LINES - 1)
+
+    # Having hit the end of the function, use the room going backwards.
+    window_start = max(start, window_end - MAX_SNIPPET_LINES + 1)
+
+    body = lines[window_start - 1 : window_end]
+    if window_start > start:
+        body = [f"    # ... {window_start - start} earlier lines"] + body
+    if window_end < end:
+        body = body + [f"    # ... {end - window_end} later lines"]
+
+    return window_start, window_end, "\n".join(body)
 
 
 def _merge(references: list[Reference]) -> dict[tuple[str, str], list[Reference]]:

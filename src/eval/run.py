@@ -18,6 +18,7 @@ from src.webhooks.events import PullRequestEvent
 logger = logging.getLogger(__name__)
 
 DEFAULT_CASES = Path("eval/cases.json")
+REPORTS = Path("eval/reports")
 
 
 @dataclass(frozen=True)
@@ -159,7 +160,13 @@ async def main() -> int:
         help="which configurations to run (default: H0)",
     )
     parser.add_argument("--case", default=None, help="run a single case by id")
-    parser.add_argument("--out", type=Path, default=None, help="write JSON here")
+    parser.add_argument(
+        "--out", type=Path, default=None,
+        help="write JSON here (default: a timestamped file in eval/reports)",
+    )
+    parser.add_argument(
+        "--no-save", action="store_true", help="do not write a report file"
+    )
     args = parser.parse_args()
 
     if not args.cases.exists():
@@ -181,9 +188,18 @@ async def main() -> int:
 
     print_report(runs)
 
-    if args.out:
-        args.out.write_text(json.dumps(as_json(runs), indent=2))
-        print(f"  written to {args.out}")
+    if not args.no_save:
+        from datetime import datetime, timezone
+
+        out = args.out
+        if out is None:
+            stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M")
+            REPORTS.mkdir(parents=True, exist_ok=True)
+            out = REPORTS / f"{stamp}-{'-'.join(args.only).lower()}.json"
+
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(as_json(runs), indent=2) + "\n")
+        print(f"  report written to {out}")
 
     return 0
 
