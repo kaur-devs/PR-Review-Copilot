@@ -9,9 +9,7 @@ logger = logging.getLogger(__name__)
 
 GITHUB_FILE_LIMIT = 3000
 
-STATUS_ADDED = "added"
 STATUS_REMOVED = "removed"
-STATUS_MODIFIED = "modified"
 STATUS_RENAMED = "renamed"
 
 

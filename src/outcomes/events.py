@@ -12,8 +12,6 @@ ACTION_UNRESOLVED = "unresolved"
 THREAD_ACTIONS = frozenset({ACTION_RESOLVED, ACTION_UNRESOLVED})
 
 OUTCOME_ACCEPTED = "accepted"
-OUTCOME_REJECTED = "rejected"
-OUTCOME_IGNORED = "ignored"
 
 
 @dataclass(frozen=True)
