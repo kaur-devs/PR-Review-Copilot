@@ -18,7 +18,9 @@
           "note": "renamed keys break chat.py, which was not changed"
         }
       ],
-      "expected_context": ["backend/app/routers/chat.py"]
+      "expected_context": [
+        "backend/app/routers/chat.py"
+      ]
     },
     {
       "id": "embedder-return-shape",
@@ -59,6 +61,35 @@
       "expected_context": [
         "backend/app/routers/repos.py",
         "backend/app/services/retriever.py"
+      ]
+    },
+    {
+      "id": "chunker-rename",
+      "repo": "kaur-devs/codebase-chat",
+      "pr": 8,
+      "installation_id": 166408152,
+      "note": "Seeded. Renames a chunk dict key, breaking three untouched files. Also leaks a file handle and drops error handling. The extension additions are correct and must not be flagged.",
+      "expected": [
+        {
+          "file": "backend/app/services/chunker.py",
+          "line": 36,
+          "note": "code_text renamed to content, breaks repos.py, retriever.py and llm.py"
+        },
+        {
+          "file": "backend/app/utils/file_filter.py",
+          "line": 71,
+          "note": "file handle opened and never closed"
+        },
+        {
+          "file": "backend/app/utils/file_filter.py",
+          "line": 68,
+          "note": "the OSError and UnicodeDecodeError handling was silently removed"
+        }
+      ],
+      "expected_context": [
+        "backend/app/routers/repos.py",
+        "backend/app/services/retriever.py",
+        "backend/app/services/llm.py"
       ]
     }
   ]
