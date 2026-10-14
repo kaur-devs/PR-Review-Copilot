@@ -241,7 +241,7 @@ follow imports across files, which is why an import check is layered on top.
 
 ---
 
-## 10. Labelling the kind of change · PLANNED
+## 10. Labelling the kind of change · BUILT
 
 **What it does.** Tags each change so the reviewer asks the right questions.
 
@@ -263,7 +263,7 @@ providers can be swapped when one runs out of quota.
 
 ---
 
-## 11. Generating the review · PLANNED
+## 11. Generating the review · BUILT
 
 **What it does.** Produces the actual findings.
 
@@ -284,7 +284,7 @@ of what comes back.
 
 ---
 
-## 12. Checking the findings · PLANNED
+## 12. Checking the findings · BUILT
 
 **What it does.** A second pass that throws away findings the code does not
 actually support.
@@ -305,7 +305,7 @@ import to back it up — are held to a higher bar.
 
 ---
 
-## 13. Deciding what is worth posting · PLANNED
+## 13. Deciding what is worth posting · BUILT
 
 **What it does.** Drops weak and repeated findings.
 
@@ -324,7 +324,7 @@ from an expensive experiment into a database query.
 
 ---
 
-## 14. Posting the comments · PLANNED
+## 14. Posting the comments · BUILT
 
 **What it does.** Puts the findings on the pull request.
 
@@ -345,7 +345,7 @@ possible.
 
 ---
 
-## 15. Learning whether it helped · PLANNED
+## 15. Learning whether it helped · BUILT
 
 **What it does.** Records what developers did with each comment.
 
@@ -365,7 +365,7 @@ dismissing one category can have that category muted automatically.
 
 ---
 
-## 16. Measuring it properly · PLANNED
+## 16. Measuring it properly · BUILT
 
 **What it does.** Replays old pull requests where the bugs are already known
 and scores the output.
@@ -430,17 +430,25 @@ weeks.
 
 ## Where it stands
 
-**Working today:** installation, receiving events, verifying them, storing
-them, not repeating work, authenticating to GitHub, fetching changed files,
-filtering them, and reading the diffs. 107 tests, none of which touch the
-network or the development database.
+**Working today, end to end on real pull requests:** everything from a webhook
+arriving to inline comments appearing on GitHub. 320 tests, none of which
+touch the network or the development database.
 
-**Proven but not in the service:** finding other affected files.
+**Not started:** deployment.
 
-**Not started:** labelling, generating, judging, filtering, posting, learning,
-measuring, deploying.
+**Measured rather than assumed:** three consecutive evaluation runs on
+identical input gave F1 of 74%, 71% and 82%, so at the current sample size of
+four cases anything moving F1 by less than about 15 points is noise. Context
+recall was exactly 50% every run, being the one metric involving no model
+call.
 
-**Known gaps, written down rather than hidden:** nothing recovers a review
-interrupted halfway; a pull request opened while the service is asleep is
-never seen; the confidence numbers are guesses not yet calibrated against real
-outcomes; and everything assumes Python.
+**Known gaps, written down rather than hidden:**
+- Connected-file context finds callers of changed functions, not consumers of
+  changed data shapes. A renamed dictionary key broke three files and none
+  were retrieved.
+- Nothing recovers a review interrupted halfway.
+- A pull request opened while the service is down is never seen; GitHub does
+  not retry.
+- Findings are not deduplicated across re-reviews.
+- The confidence numbers are hand-chosen, not calibrated.
+- Everything assumes Python.
