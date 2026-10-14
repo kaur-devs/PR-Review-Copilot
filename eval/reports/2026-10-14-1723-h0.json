@@ -1,0 +1,80 @@
+{
+  "runs": [
+    {
+      "label": "H0 full pipeline",
+      "recall": 0.875,
+      "precision": 0.6363636363636364,
+      "f1": 0.7368421052631579,
+      "context_recall": 0.5,
+      "model_calls": 14,
+      "errors": 0,
+      "cases": [
+        {
+          "id": "retriever-renamed-keys",
+          "matched": 1,
+          "missed": [
+            "backend/app/services/retriever.py:116 (renamed keys break chat.py, which was not changed)"
+          ],
+          "extra": [],
+          "context_found": [
+            "backend/app/routers/chat.py"
+          ],
+          "context_missed": [],
+          "model_calls": 3,
+          "seconds": 5.2,
+          "error": null
+        },
+        {
+          "id": "embedder-return-shape",
+          "matched": 1,
+          "missed": [],
+          "extra": [],
+          "context_found": [
+            "backend/app/services/retriever.py"
+          ],
+          "context_missed": [
+            "backend/app/routers/repos.py"
+          ],
+          "model_calls": 4,
+          "seconds": 54.4,
+          "error": null
+        },
+        {
+          "id": "embedder-blocking-sleep",
+          "matched": 2,
+          "missed": [],
+          "extra": [
+            "backend/app/config.py:12 Changed default GitHub redirect URI may break existing OAuth configurations",
+            "backend/app/config.py:27 Changed default LLM model may alter behavior or cause runtime errors if the new model is unavailable",
+            "backend/app/services/embedder.py:35 Batch size reduced to 8 may cause many more API calls, increasing latency and rate\u2011limit risk"
+          ],
+          "context_found": [
+            "backend/app/routers/repos.py",
+            "backend/app/services/retriever.py"
+          ],
+          "context_missed": [],
+          "model_calls": 4,
+          "seconds": 56.1,
+          "error": null
+        },
+        {
+          "id": "chunker-rename",
+          "matched": 3,
+          "missed": [],
+          "extra": [
+            "backend/app/utils/file_filter.py:63 Function is_hidden uses Path without importing it"
+          ],
+          "context_found": [],
+          "context_missed": [
+            "backend/app/routers/repos.py",
+            "backend/app/services/retriever.py",
+            "backend/app/services/llm.py"
+          ],
+          "model_calls": 3,
+          "seconds": 6.1,
+          "error": null
+        }
+      ]
+    }
+  ]
+}

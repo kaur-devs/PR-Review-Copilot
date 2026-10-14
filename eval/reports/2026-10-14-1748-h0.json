@@ -1,0 +1,81 @@
+{
+  "runs": [
+    {
+      "label": "H0 full pipeline",
+      "recall": 0.75,
+      "precision": 0.6666666666666666,
+      "f1": 0.7058823529411765,
+      "context_recall": 0.5,
+      "model_calls": 14,
+      "errors": 0,
+      "cases": [
+        {
+          "id": "retriever-renamed-keys",
+          "matched": 2,
+          "missed": [],
+          "extra": [],
+          "context_found": [
+            "backend/app/routers/chat.py"
+          ],
+          "context_missed": [],
+          "model_calls": 3,
+          "seconds": 5.2,
+          "error": null
+        },
+        {
+          "id": "embedder-return-shape",
+          "matched": 0,
+          "missed": [
+            "backend/app/services/embedder.py:62 (return shape changed, breaks callers)"
+          ],
+          "extra": [
+            "backend/app/routers/repos.py:117 The API response now includes a new 'embedding_stats' field, which may break strict clients."
+          ],
+          "context_found": [
+            "backend/app/services/retriever.py"
+          ],
+          "context_missed": [
+            "backend/app/routers/repos.py"
+          ],
+          "model_calls": 4,
+          "seconds": 62.3,
+          "error": null
+        },
+        {
+          "id": "embedder-blocking-sleep",
+          "matched": 2,
+          "missed": [],
+          "extra": [
+            "backend/app/config.py:27 Changed default LLM model may alter system behavior or cause runtime errors",
+            "backend/app/config.py:12 Changed default GitHub redirect URI may break existing OAuth configurations"
+          ],
+          "context_found": [
+            "backend/app/routers/repos.py",
+            "backend/app/services/retriever.py"
+          ],
+          "context_missed": [],
+          "model_calls": 4,
+          "seconds": 66.5,
+          "error": null
+        },
+        {
+          "id": "chunker-rename",
+          "matched": 2,
+          "missed": [
+            "backend/app/utils/file_filter.py:68 (the OSError and UnicodeDecodeError handling was silently removed)"
+          ],
+          "extra": [],
+          "context_found": [],
+          "context_missed": [
+            "backend/app/routers/repos.py",
+            "backend/app/services/retriever.py",
+            "backend/app/services/llm.py"
+          ],
+          "model_calls": 3,
+          "seconds": 4.9,
+          "error": null
+        }
+      ]
+    }
+  ]
+}
