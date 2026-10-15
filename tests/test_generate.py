@@ -252,3 +252,16 @@ def test_templates_can_be_switched_off_for_an_experiment(monkeypatch):
     monkeypatch.setenv("TEMPLATES_ENABLED", "0")
 
     assert build_system_prompt(API) == build_system_prompt(LOGIC)
+
+
+def test_a_line_with_no_number_does_not_crash_the_prompt():
+    """The "\\ No newline at end of file" marker has neither an old nor a new
+    line number. Formatting it as a number raised TypeError on a real PR."""
+    from src.diff.parse import parse_patch
+
+    patch = "@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+new"
+    diff = parse_patch(patch, "a.py")
+
+    prompt = build_user_prompt([diff], ContextBundle())
+
+    assert "a.py" in prompt

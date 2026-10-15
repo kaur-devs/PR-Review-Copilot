@@ -85,7 +85,7 @@ def _diff_block(diff: FileDiff) -> str:
         lines.append(f"@@ lines {hunk.new_start}-{hunk.new_start + hunk.new_length - 1} @@")
         for line in hunk.lines:
             marker = "+" if line.is_added else "-" if line.is_removed else " "
-            number = line.new_line if line.new_line else line.old_line
+            number = line.new_line or line.old_line or 0
             lines.append(f"{number:>5} {marker}{line.content}")
     return "\n".join(lines)
 
