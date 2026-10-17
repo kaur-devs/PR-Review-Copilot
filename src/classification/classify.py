@@ -10,7 +10,7 @@ from src.classification.kinds import (
     Classification,
     classify_by_rules,
 )
-from src.classification.prompts import SYSTEM, build_user_prompt
+from src.classification.prompts import SYSTEM, build_user_prompt, split_into_requests
 from src.context.symbols import Symbol
 from src.diff.parse import FileDiff
 from src.review.provider import LLMError, LLMProvider
@@ -78,22 +78,32 @@ async def classify(
             results[diff.filename] = _fallback(diff.filename, "no model available")
         return results
 
-    expected = {diff.filename for diff in undecided}
+    batches = split_into_requests(undecided, symbols)
+    logger.info("classification: asking the model in %s request(s)", len(batches))
 
-    try:
-        answer = await model.complete_json(
-            SYSTEM, build_user_prompt(undecided, symbols)
-        )
-    except LLMError as error:
-        logger.warning("classification fell back to logic: %s", error)
-        for path in expected:
-            results[path] = _fallback(path, f"the model failed: {error}")
-        return results
+    for batch in batches:
+        expected = {diff.filename for diff in batch}
 
-    from_model = _read_model_answer(answer, expected)
-    results.update(from_model)
+        try:
+            answer = await model.complete_json(
+                SYSTEM, build_user_prompt(batch, symbols)
+            )
+        except LLMError as error:
+            # Only this batch falls back. One refused request used to cost us
+            # the labels for every file in the pull request.
+            logger.warning(
+                "classification fell back to logic for %s file(s): %s",
+                len(expected),
+                error,
+            )
+            for path in expected:
+                results[path] = _fallback(path, f"the model failed: {error}")
+            continue
 
-    for path in expected - from_model.keys():
-        results[path] = _fallback(path, "the model left it out")
+        from_model = _read_model_answer(answer, expected)
+        results.update(from_model)
+
+        for path in expected - from_model.keys():
+            results[path] = _fallback(path, "the model left it out")
 
     return results

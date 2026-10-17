@@ -18,6 +18,7 @@ from src.classification.kinds import (
     classify_by_rules,
 )
 from src.context.symbols import Symbol
+from src.classification.prompts import build_user_prompt, split_into_requests
 from src.diff.parse import parse_patch
 from src.review.provider import LLMProvider
 
@@ -206,3 +207,111 @@ def test_only_some_kinds_need_surrounding_code():
     assert Classification("a.py", SCHEMA, RULE_BASED).needs_context
     assert not Classification("a.py", DOCS, RULE_BASED).needs_context
     assert not Classification("a.py", DEPENDENCY, RULE_BASED).needs_context
+
+
+def recording_model(answers_by_request=None, *, fail_on=()):
+    """A model that answers each request separately and records what it saw."""
+    seen: list[list[str]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        prompt = body["messages"][1]["content"]
+        paths = [
+            line.removeprefix("FILE: ")
+            for line in prompt.splitlines()
+            if line.startswith("FILE: ")
+        ]
+        seen.append(paths)
+
+        if len(seen) in fail_on:
+            return httpx.Response(400, json={"error": "too big"})
+
+        return httpx.Response(200, json={
+            "model": "test",
+            "choices": [{"message": {"content": json.dumps({
+                "files": [
+                    {"file": path, "kind": LOGIC, "reason": "test"} for path in paths
+                ]
+            })}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        })
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    return client, seen
+
+
+def test_one_small_file_is_one_request():
+    batches = split_into_requests([diff_for("a.py")], [])
+
+    assert len(batches) == 1
+
+
+def test_files_are_split_so_each_request_fits():
+    diffs = [diff_for(f"app/module_{n}.py") for n in range(12)]
+
+    batches = split_into_requests(diffs, [], limit=120)
+
+    assert len(batches) > 1
+    for batch in batches:
+        assert len(build_user_prompt(batch, [])) <= 120 or len(batch) == 1
+        assert batch
+
+
+def test_splitting_loses_no_file_and_duplicates_none():
+    diffs = [diff_for(f"app/module_{n}.py") for n in range(25)]
+
+    batches = split_into_requests(diffs, [], limit=150)
+    flattened = [diff.filename for batch in batches for diff in batch]
+
+    assert flattened == [diff.filename for diff in diffs]
+
+
+def test_a_file_too_large_on_its_own_still_goes_out_alone():
+    batches = split_into_requests([diff_for("huge.py")], [], limit=1)
+
+    assert len(batches) == 1
+    assert len(batches[0]) == 1
+
+
+def test_symbols_count_towards_the_size_of_a_file():
+    diffs = [diff_for("a.py"), diff_for("b.py")]
+    many = [
+        Symbol(f"f{n}", f"Big.f{n}", "function", "a.py", n, n + 1) for n in range(40)
+    ]
+
+    assert len(split_into_requests(diffs, [], limit=200)) == 1
+    assert len(split_into_requests(diffs, many, limit=200)) == 2
+
+
+@pytest.mark.asyncio
+async def test_many_files_are_classified_across_several_requests(monkeypatch):
+    monkeypatch.setattr(
+        "src.classification.prompts.MAX_PROMPT_CHARACTERS", 150, raising=False
+    )
+    diffs = [diff_for(f"app/module_{n}.py") for n in range(10)]
+    client, seen = recording_model()
+
+    async with LLMProvider(api_key="k", client=client) as model:
+        results = await classify(model, diffs, [])
+
+    assert len(seen) > 1
+    assert set(results) == {diff.filename for diff in diffs}
+    assert all(label.source == MODEL_BASED for label in results.values())
+
+
+@pytest.mark.asyncio
+async def test_one_refused_request_only_costs_its_own_files(monkeypatch):
+    monkeypatch.setattr(
+        "src.classification.prompts.MAX_PROMPT_CHARACTERS", 150, raising=False
+    )
+    diffs = [diff_for(f"app/module_{n}.py") for n in range(10)]
+    client, seen = recording_model(fail_on=(1,))
+
+    async with LLMProvider(api_key="k", client=client) as model:
+        results = await classify(model, diffs, [])
+
+    assert set(results) == {diff.filename for diff in diffs}
+
+    fell_back = {p for p, label in results.items() if label.source == FALLBACK}
+    assert fell_back == set(seen[0])
+    assert len(fell_back) < len(diffs)
