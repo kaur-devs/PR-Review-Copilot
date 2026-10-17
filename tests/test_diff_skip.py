@@ -15,9 +15,27 @@ def make(filename, *, status="modified", changes=2, patch=PATCH):
     )
 
 
-def test_ordinary_source_files_are_reviewed():
+def test_ordinary_python_files_are_reviewed():
     assert decide(make("src/models.py")).skip is False
-    assert decide(make("app/components/Button.tsx")).skip is False
+    assert decide(make("app/services/billing.py")).skip is False
+
+
+def test_other_languages_are_skipped():
+    for path in ["app/components/Button.tsx", "frontend/App.jsx", "styles/main.css"]:
+        decision = decide(make(path))
+
+        assert decision.skip
+        assert "Python" in decision.reason
+
+
+def test_files_with_no_extension_are_skipped():
+    assert decide(make("Makefile")).skip
+
+
+def test_vendored_javascript_is_reported_as_vendored_not_as_the_wrong_language():
+    reason = decide(make("node_modules/left-pad/index.js")).reason
+
+    assert reason == "it is vendored or generated output"
 
 
 def test_deleted_files_are_skipped():
@@ -73,9 +91,10 @@ def test_splitting_a_set_keeps_the_reasons():
         make("src/models.py"),
         make("package-lock.json"),
         make("node_modules/x.js"),
+        make("web/app.css"),
         make("src/service.py"),
     ])
 
     assert [f.filename for f in keep] == ["src/models.py", "src/service.py"]
-    assert set(skipped) == {"package-lock.json", "node_modules/x.js"}
+    assert set(skipped) == {"package-lock.json", "node_modules/x.js", "web/app.css"}
     assert skipped["package-lock.json"] == "it is a lockfile"

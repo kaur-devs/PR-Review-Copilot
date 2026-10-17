@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from src.diff.files import ChangedFile
 
@@ -42,6 +43,13 @@ GENERATED_SUFFIXES = (
     ".lock",
 )
 
+# We only review languages we can actually parse. tree-sitter is loaded for
+# Python alone, so any other language would reach the model with no symbols
+# and no connected code: a worse review wearing the same label as a good one.
+# Adding a language means loading its grammar in src/context/symbols.py, not
+# just adding a suffix here.
+REVIEWABLE_SUFFIXES = frozenset({".py"})
+
 
 @dataclass(frozen=True)
 class SkipDecision:
@@ -67,6 +75,11 @@ def decide(changed: ChangedFile) -> SkipDecision:
 
     if any(path.endswith(suffix) for suffix in GENERATED_SUFFIXES):
         return SkipDecision(True, "it looks machine-generated")
+
+    # Checked after the rules above so a vendored JavaScript file is reported
+    # as vendored, which is the more useful reason of the two.
+    if Path(path).suffix not in REVIEWABLE_SUFFIXES:
+        return SkipDecision(True, "we only review Python")
 
     if changed.changes > MAX_CHANGED_LINES_PER_FILE:
         return SkipDecision(
