@@ -30,6 +30,12 @@ class Finding:
     confidence: float
     evidence_files: tuple[str, ...] = ()
 
+    # Replacement text for the line this finding sits on, when the model
+    # offered one. Carried here but not posted until it passes its own gate:
+    # a wrong comment costs the reader ten seconds, a wrong suggestion costs
+    # them one click.
+    suggestion: str | None = None
+
     @property
     def sort_key(self) -> tuple[int, float, str, int]:
         return (

@@ -16,7 +16,28 @@ logger = logging.getLogger(__name__)
 MAX_FINDINGS_PER_REQUEST = 20
 MAX_MESSAGE_LENGTH = 300
 MAX_RATIONALE_LENGTH = 600
+
+# A suggestion replaces one line. Anything longer than this is the model
+# rewriting a function, which is not what the Apply button is for.
+MAX_SUGGESTION_LENGTH = 400
 SKIP_KINDS = frozenset({"docs"})
+
+
+def _read_suggestion(value: object) -> str | None:
+    """The replacement text, or None when there is nothing usable.
+
+    Deliberately not stripped the way a message is. Leading whitespace is the
+    indentation GitHub will paste into the file, so losing it produces code
+    that does not compile. Only trailing blank lines go.
+    """
+    if not isinstance(value, str):
+        return None
+
+    text = value.rstrip("\n")
+    if not text.strip():
+        return None
+
+    return text[:MAX_SUGGESTION_LENGTH]
 
 
 def _coerce_confidence(value: object) -> float | None:
@@ -75,6 +96,7 @@ def _read_finding(
         rationale=str(entry.get("rationale", "")).strip()[:MAX_RATIONALE_LENGTH],
         confidence=confidence,
         evidence_files=evidence,
+        suggestion=_read_suggestion(entry.get("suggestion")),
     ), ""
 
 

@@ -22,7 +22,8 @@ Reply with JSON only, in this shape:
     "category": "<{'|'.join(CATEGORIES)}>",
     "message": "<one sentence, what is wrong>",
     "rationale": "<one or two sentences, why, pointing at the code>",
-    "confidence": <0.0 to 1.0>}}
+    "confidence": <0.0 to 1.0>,
+    "suggestion": "<replacement for that line, or null>"}}
 ]}}
 
 Return {{"findings": []}} when the change looks fine.
@@ -31,7 +32,10 @@ Rules:
 - line must be a line shown in the diff. Anything else cannot be posted.
 - Never comment on style, formatting or naming preferences.
 - Never restate what the code does.
-- One finding per problem. Do not repeat yourself."""
+- One finding per problem. Do not repeat yourself.
+- suggestion replaces that one line completely. If the line should stay, put
+  it back in your replacement. Keep the original indentation exactly. Use
+  null unless the fix is a small, local edit you are sure about."""
 
 QUESTIONS = {
     API: """This change touches a route, endpoint or public interface. Ask:
