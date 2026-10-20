@@ -7,7 +7,7 @@ from src.classification.kinds import API, DOCS, LOGIC, RULE_BASED, Classificatio
 from src.context.bundle import ContextBundle, ContextItem
 from src.diff.parse import parse_patch
 from src.review.findings import Finding
-from src.review.generate import generate
+from src.review.generate import MAX_SUGGESTION_LENGTH, _read_finding, generate
 from src.review.prompts import build_system_prompt, build_user_prompt
 from src.review.provider import LLMProvider
 
@@ -22,6 +22,22 @@ PATCH = (
 
 def diff_for(path="app/models.py"):
     return parse_patch(PATCH, path)
+
+
+def _entry(**overrides):
+    """A model answer that would parse into a Finding, for tweaking."""
+    entry = {
+        "file": "app/service.py",
+        "line": 18,
+        "severity": "high",
+        "category": "correctness",
+        "message": "divides by the length of a list that can be empty",
+        "rationale": "chunks comes straight from the caller with no check",
+        "confidence": 0.9,
+        "suggestion": None,
+    }
+    entry.update(overrides)
+    return entry
 
 
 def labelled(path, kind=LOGIC):
@@ -265,3 +281,58 @@ def test_a_line_with_no_number_does_not_crash_the_prompt():
     prompt = build_user_prompt([diff], ContextBundle())
 
     assert "a.py" in prompt
+
+
+def test_a_suggestion_is_read_when_the_model_offers_one():
+    finding, reason = _read_finding(
+        _entry(suggestion="    return total / len(chunks) if chunks else 0.0"),
+        {"app/service.py": diff_for("app/service.py")},
+        ContextBundle(),
+    )
+
+    assert finding.suggestion == "    return total / len(chunks) if chunks else 0.0"
+
+
+def test_a_suggestion_keeps_its_indentation():
+    finding, _ = _read_finding(
+        _entry(suggestion="        if not chunks:\n            return 0.0\n"),
+        {"app/service.py": diff_for("app/service.py")},
+        ContextBundle(),
+    )
+
+    assert finding.suggestion.startswith("        if not chunks:")
+    assert finding.suggestion.endswith("return 0.0")
+
+
+def test_no_suggestion_is_the_normal_case():
+    for value in [None, "", "   ", "\n\n", 42, [], {"a": 1}]:
+        finding, _ = _read_finding(
+            _entry(suggestion=value),
+            {"app/service.py": diff_for("app/service.py")},
+            ContextBundle(),
+        )
+
+        assert finding is not None, "a bad suggestion must not drop the finding"
+        assert finding.suggestion is None
+
+
+def test_a_finding_with_no_suggestion_key_at_all_still_parses():
+    entry = _entry()
+    entry.pop("suggestion", None)
+
+    finding, reason = _read_finding(
+        entry, {"app/service.py": diff_for("app/service.py")}, ContextBundle()
+    )
+
+    assert finding is not None
+    assert finding.suggestion is None
+
+
+def test_an_enormous_suggestion_is_cut_short():
+    finding, _ = _read_finding(
+        _entry(suggestion="x = 1\n" * 500),
+        {"app/service.py": diff_for("app/service.py")},
+        ContextBundle(),
+    )
+
+    assert len(finding.suggestion) <= MAX_SUGGESTION_LENGTH
