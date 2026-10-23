@@ -25,6 +25,7 @@ IndentationError. Different job, different tool.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field, replace
 from typing import Collection, Mapping
 
@@ -37,6 +38,16 @@ logger = logging.getLogger(__name__)
 # harness shows it refuses everything.
 SUGGESTABLE_SEVERITIES = frozenset({SEVERITY_HIGH})
 MINIMUM_CONFIDENCE = 0.8
+
+# A suggestion is posted inside a fenced block, so a suggestion containing a
+# fence would close it early and spill the rest into the comment as prose.
+FENCE = "```"
+
+
+def suggestions_enabled() -> bool:
+    return os.getenv("SUGGESTIONS_ENABLED", "1").lower() not in (
+        "0", "false", "no", "off"
+    )
 
 
 @dataclass(frozen=True)
@@ -141,6 +152,12 @@ def passes_cheap_checks(
     """
     if not finding.suggestion:
         return SuggestionDecision(False, "no suggestion was offered")
+
+    if not suggestions_enabled():
+        return SuggestionDecision(False, "suggestions are switched off")
+
+    if FENCE in finding.suggestion:
+        return SuggestionDecision(False, "it contains a code fence")
 
     if finding.severity not in SUGGESTABLE_SEVERITIES:
         return SuggestionDecision(

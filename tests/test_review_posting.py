@@ -34,12 +34,12 @@ def forget_cached_tokens():
     auth.clear_token_cache()
 
 
-def make(severity="high", line=10, confidence=0.9, evidence=()):
+def make(severity="high", line=10, confidence=0.9, evidence=(), suggestion=None):
     return Finding(
         file="app/models.py", line=line, severity=severity, category="correctness",
         message="Callers assume a user is returned",
         rationale="service.py reads user.email straight after calling this.",
-        confidence=confidence, evidence_files=evidence,
+        confidence=confidence, evidence_files=evidence, suggestion=suggestion,
     )
 
 
@@ -268,3 +268,52 @@ async def test_two_findings_on_the_same_line_each_get_their_own_comment():
 
     assert matched == 2
     assert sorted(ids) == [8001, 8002]
+
+
+# ---------------------------------------------------------------------------
+# Suggested changes
+# ---------------------------------------------------------------------------
+
+def test_a_suggestion_is_fenced_so_github_renders_the_apply_button():
+    body = build_comment_body(make(suggestion="    return _USERS.get(user_id)"))
+
+    assert "```suggestion\n    return _USERS.get(user_id)\n```" in body
+
+
+def test_a_suggestion_keeps_its_indentation_through_rendering():
+    body = build_comment_body(
+        make(suggestion="        if not user:\n            return None")
+    )
+
+    assert "\n        if not user:\n" in body
+
+
+def test_the_fence_sits_after_the_reason_and_before_the_context():
+    body = build_comment_body(
+        make(suggestion="    pass", evidence=("app/service.py",))
+    )
+
+    assert body.index("service.py reads") < body.index("```suggestion")
+    assert body.index("```suggestion") < body.index("Related code")
+
+
+def test_a_finding_with_no_suggestion_has_no_fence():
+    assert "```suggestion" not in build_comment_body(make())
+
+
+def test_the_summary_says_how_many_come_with_a_fix():
+    body = build_review_body([make(suggestion="    pass"), make(line=2)], 0)
+
+    assert "1 of them comes with a suggested change." in body
+
+
+def test_the_summary_counts_more_than_one_correctly():
+    body = build_review_body(
+        [make(suggestion="    pass"), make(line=2, suggestion="    pass")], 0
+    )
+
+    assert "2 of them come with a suggested change." in body
+
+
+def test_the_summary_stays_quiet_when_nothing_is_suggested():
+    assert "suggested change" not in build_review_body([make()], 0)
