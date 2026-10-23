@@ -83,3 +83,61 @@ async def test_an_error_from_github_is_raised():
     async with GitHubClient(42, client=client) as github:
         with pytest.raises(httpx.HTTPStatusError):
             await github.get("/repos/owner/missing/pulls/1")
+
+
+SOURCE = "def average(values):\n    return sum(values) / len(values)\n"
+
+
+async def test_a_file_comes_back_as_text():
+    client, calls = _fake_github([[]], contents={"app/stats.py": SOURCE})
+
+    async with GitHubClient(42, client=client) as github:
+        text = await github.read_file("owner/name", "app/stats.py", "abc1234")
+
+    assert text == SOURCE
+
+
+async def test_the_raw_media_type_is_asked_for_at_the_given_commit():
+    client, calls = _fake_github([[]], contents={"app/stats.py": SOURCE})
+
+    async with GitHubClient(42, client=client) as github:
+        await github.read_file("owner/name", "app/stats.py", "abc1234")
+
+    request = calls[-1]
+    assert request.headers["Accept"] == "application/vnd.github.raw"
+    assert request.url.params["ref"] == "abc1234"
+    assert request.url.path == "/repos/owner/name/contents/app/stats.py"
+
+
+async def test_a_missing_file_is_none_rather_than_an_error():
+    client, _ = _fake_github([[]], contents={})
+
+    async with GitHubClient(42, client=client) as github:
+        assert await github.read_file("owner/name", "gone.py", "abc1234") is None
+
+
+async def test_a_file_that_is_not_utf8_is_none():
+    client, _ = _fake_github([[]], contents={})
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json={
+                "token": "ghs_test",
+                "expires_at": (
+                    datetime.now(timezone.utc) + timedelta(hours=1)
+                ).isoformat().replace("+00:00", "Z"),
+            })
+        return httpx.Response(200, content=b"\xff\xfe\x00binary")
+
+    binary = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    async with GitHubClient(42, client=binary) as github:
+        assert await github.read_file("owner/name", "logo.png", "abc1234") is None
+
+
+async def test_a_file_too_large_to_check_is_none():
+    huge = "x = 1\n" * 400_000
+
+    client, _ = _fake_github([[]], contents={"big.py": huge})
+
+    async with GitHubClient(42, client=client) as github:
+        assert await github.read_file("owner/name", "big.py", "abc1234") is None
