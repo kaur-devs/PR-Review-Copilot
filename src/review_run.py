@@ -12,6 +12,7 @@ from src.context.gather import gather_context
 from src.diff.files import ChangedFileSet, fetch_changed_files
 from src.diff.parse import FileDiff, parse_changed_files
 from src.diff.skip import worth_reviewing
+from src.filter.suggest import SuggestionOutcome, files_to_read, settle
 from src.github.client import GitHubClient
 from src.judge.verify import JudgeResult, judge_findings, judge_model_name
 from src.review.findings import Finding
@@ -39,6 +40,7 @@ class ReviewOutcome:
     context: ContextBundle = field(default_factory=ContextBundle)
     classifications: dict[str, Classification] = field(default_factory=dict)
     judged: JudgeResult = field(default_factory=JudgeResult)
+    suggestions: SuggestionOutcome = field(default_factory=SuggestionOutcome)
     skipped_files: dict[str, str] = field(default_factory=dict)
     model_calls: int = 0
     seconds: float = 0.0
@@ -47,6 +49,31 @@ class ReviewOutcome:
     @property
     def ran(self) -> bool:
         return self.skipped is None
+
+
+async def _settle_suggestions(
+    findings: list[Finding],
+    unverified: set[Finding],
+    event: PullRequestEvent,
+    client,
+) -> SuggestionOutcome:
+    """Decide which findings may offer a replacement line.
+
+    The cheap checks run first so that on a pull request with no candidates,
+    which is most of them, this makes no network calls at all.
+    """
+    wanted = files_to_read(findings, unverified=unverified)
+    if not wanted:
+        return settle(findings, unverified=unverified)
+
+    sources: dict[str, str] = {}
+    async with GitHubClient(event.installation_id, client=client) as github:
+        for path in sorted(wanted):
+            text = await github.read_file(event.repo_full_name, path, event.head_sha)
+            if text is not None:
+                sources[path] = text
+
+    return settle(findings, sources=sources, unverified=unverified)
 
 
 async def review_pull_request(
@@ -168,7 +195,23 @@ async def review_pull_request(
             f"kept at {finding.confidence}  {reason}"
         )
 
-    outcome.findings = outcome.judged.kept
+    outcome.suggestions = await _settle_suggestions(
+        outcome.judged.kept,
+        {finding for finding, _ in outcome.judged.unverified},
+        event,
+        github_client,
+    )
+    outcome.findings = outcome.suggestions.findings
+
+    trace.section(
+        "SUGGESTIONS",
+        f"{outcome.suggestions.offered} offered, "
+        f"{len(outcome.suggestions.refused)} refused",
+    )
+    for finding, reason in outcome.suggestions.refused:
+        trace.item(f"refused  {finding.file}:{finding.line}  {reason}")
+        trace.snippet(finding.suggestion or "")
+
     outcome.model_calls = quota.requests - calls_before
     outcome.seconds = time.monotonic() - started
     return outcome

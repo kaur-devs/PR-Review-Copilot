@@ -34,6 +34,12 @@ def build_comment_body(finding: Finding) -> str:
     if finding.rationale and finding.rationale != finding.message:
         parts.extend(["", finding.rationale])
 
+    # Placed after the explanation and before the surrounding context, so
+    # the reader meets the problem, then the reason, then the fix. GitHub turns
+    # this block into a diff with a "Commit suggestion" button.
+    if finding.suggestion:
+        parts.extend(["", "```suggestion", finding.suggestion, "```"])
+
     if finding.evidence_files:
         others = ", ".join(f"`{name}`" for name in sorted(set(finding.evidence_files)))
         parts.extend(["", f"Related code: {others}"])
@@ -52,6 +58,12 @@ def build_review_body(posted: list[Finding], held: int) -> str:
 
     summary = ", ".join(f"{n} {severity}" for severity, n in counts.items())
     lines = [f"Found {len(posted)} issue(s): {summary}."]
+
+    suggested = sum(1 for finding in posted if finding.suggestion)
+    if suggested:
+        lines.append("")
+        verb = "comes" if suggested == 1 else "come"
+        lines.append(f"{suggested} of them {verb} with a suggested change.")
 
     if held:
         lines.append("")
