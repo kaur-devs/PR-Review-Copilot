@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 # waiting forever would block a review indefinitely.
 TIMEOUT_SECONDS = 15.0
 
+# Matches the per-file cap used when unpacking a snapshot. A file bigger than
+# this is not one we are going to suggest a one-line edit to.
+MAX_FILE_BYTES = 1024 * 1024
+
 
 class GitHubClient:
     """Talks to GitHub as one installation."""
@@ -87,6 +91,42 @@ class GitHubClient:
             params = None
 
         return results
+
+    async def read_file(self, repo_full_name: str, path: str, ref: str) -> str | None:
+        """One file's text as it stands at a commit, or None if unavailable.
+
+        Asked for with the raw media type, so GitHub sends the bytes rather
+        than a JSON envelope with base64 inside it.
+
+        The ref is a commit SHA, not a branch. A branch moves, and a
+        suggestion checked against the wrong revision is worse than no
+        suggestion at all.
+
+        Returns None rather than raising, because this only ever decides
+        whether a suggestion may be offered. Losing one is not worth losing
+        the review.
+        """
+        url = f"{GITHUB_API}/repos/{repo_full_name}/contents/{path}"
+        headers = {**await self._headers(), "Accept": "application/vnd.github.raw"}
+
+        try:
+            response = await self._client.get(
+                url, headers=headers, params={"ref": ref}
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            logger.info("could not read %s at %s: %s", path, ref[:7], error)
+            return None
+
+        if len(response.content) > MAX_FILE_BYTES:
+            logger.info("%s is too large to check a suggestion against", path)
+            return None
+
+        try:
+            return response.content.decode("utf-8")
+        except UnicodeDecodeError:
+            logger.info("%s is not text we can read", path)
+            return None
 
     async def post(self, path: str, json: Any) -> Any:
         """Send something, for example a review."""

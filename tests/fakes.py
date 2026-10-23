@@ -38,7 +38,10 @@ def build_tarball(entries: dict[str, bytes] | None = None) -> bytes:
 
 
 def fake_github(
-    pages: list[list[dict]], *, archive: bytes | None = None
+    pages: list[list[dict]],
+    *,
+    archive: bytes | None = None,
+    contents: dict[str, str] | None = None,
 ) -> tuple[httpx.AsyncClient, list[httpx.Request]]:
     calls: list[httpx.Request] = []
     posted_comments: list[dict] = []
@@ -51,6 +54,13 @@ def fake_github(
 
         if "/tarball/" in request.url.path:
             return httpx.Response(200, content=archive or build_tarball())
+
+        if "/contents/" in request.url.path:
+            wanted = request.url.path.split("/contents/", 1)[1]
+            text = (contents or {}).get(wanted)
+            if text is None:
+                return httpx.Response(404, json={"message": "Not Found"})
+            return httpx.Response(200, content=text.encode())
 
         if request.url.path.endswith("/reviews") and request.method == "POST":
             import json as _json
