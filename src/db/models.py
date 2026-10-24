@@ -38,10 +38,12 @@ class Base(DeclarativeBase):
 
 # Listed here so the database rejects a typo rather than storing a status
 # nothing understands. "superseded" means newer commits arrived and this
-# review no longer matters; "skipped" means there was nothing worth reviewing.
+# review no longer matters; "skipped" means there was nothing worth reviewing;
+# "all_repeats" means every finding had already been posted on this pull
+# request, which is a different thing from having found nothing.
 REVIEW_STATUSES = (
     "received", "processing", "posting", "posted",
-    "skipped", "no_findings", "superseded", "failed",
+    "skipped", "no_findings", "all_repeats", "superseded", "failed",
 )
 
 # "duplicate" covers both seeing the same message twice and already holding

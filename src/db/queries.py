@@ -22,6 +22,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models import Finding, Installation, Repo, Review, WebhookEvent
+from src.filter.repeat import SaidBefore
 from src.webhooks.events import PullRequestEvent
 
 
@@ -255,3 +256,39 @@ async def record_posted_review(
 
     await session.commit()
     return matched
+
+
+async def previously_posted(
+    session: AsyncSession, review_id: int
+) -> list[SaidBefore]:
+    """What earlier reviews of this same pull request already posted.
+
+    Found through this review rather than from the event, so the caller does
+    not have to know the difference between GitHub's numeric repository id and
+    our own. Only posted findings count: one we held back was never seen, so
+    saying it now is not a repeat.
+    """
+    current = (
+        await session.execute(
+            select(Review.repo_id, Review.pr_number).where(Review.id == review_id)
+        )
+    ).first()
+
+    if current is None:
+        return []
+
+    repo_id, pr_number = current
+
+    rows = await session.execute(
+        select(Finding.file, Finding.line, Finding.category)
+        .join(Review, Finding.review_id == Review.id)
+        .where(
+            Review.repo_id == repo_id,
+            Review.pr_number == pr_number,
+            Review.id != review_id,
+            Finding.posted.is_(True),
+        )
+    )
+
+    return [SaidBefore(file=file, line=line, category=category)
+            for file, line, category in rows]
