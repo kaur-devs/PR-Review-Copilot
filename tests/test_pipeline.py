@@ -1,3 +1,6 @@
+import json
+from dataclasses import replace
+
 import pytest
 from sqlalchemy import select
 
@@ -34,10 +37,10 @@ def forget_cached_tokens():
     auth.clear_token_cache()
 
 
-async def make_review() -> int:
+async def make_review(event=EVENT) -> int:
     async with get_session_factory()() as session:
-        repo_id = await ensure_repo(session, EVENT)
-        return await claim_review(session, repo_id, EVENT)
+        repo_id = await ensure_repo(session, event)
+        return await claim_review(session, repo_id, event)
 
 
 async def review_row(review_id: int):
@@ -50,12 +53,12 @@ async def review_row(review_id: int):
         return result.one()
 
 
-async def run_pipeline(pages, *, findings=None, classifications=None):
-    review_id = await make_review()
+async def run_pipeline(pages, *, findings=None, classifications=None, event=EVENT):
+    review_id = await make_review(event)
     client, calls = fake_github(pages)
     model = fake_model(classifications=classifications, findings=findings)
     await process_pull_request(
-        EVENT, review_id, github_client=client, llm_client=model
+        event, review_id, github_client=client, llm_client=model
     )
     return review_id, calls
 
@@ -236,3 +239,91 @@ async def test_a_finding_the_judge_supports_is_posted():
 
     status, _, _ = await review_row(review_id)
     assert status == "posted"
+
+
+# ---------------------------------------------------------------------------
+# Not saying the same thing twice
+# ---------------------------------------------------------------------------
+
+AFTER_A_PUSH = replace(EVENT, head_sha="c" * 40, delivery_id="d-2")
+
+FILES = [[api_file("models.py", patch=PATCH)]]
+LABELS = {"models.py": "logic"}
+
+
+def model_finding(line=18, category="correctness", confidence=0.9, message=None):
+    return {
+        "file": "models.py",
+        "line": line,
+        "severity": "high",
+        "category": category,
+        "message": message or "Callers assume a user is returned",
+        "rationale": "service.py reads user.email straight after.",
+        "confidence": confidence,
+    }
+
+
+async def test_a_finding_already_posted_is_not_posted_again():
+    await run_pipeline(FILES, classifications=LABELS, findings=[model_finding()])
+
+    second_id, calls = await run_pipeline(
+        FILES, classifications=LABELS, findings=[model_finding()], event=AFTER_A_PUSH
+    )
+
+    assert [c for c in calls if c.url.path.endswith("/reviews")] == []
+
+    status, _, _ = await review_row(second_id)
+    assert status == "all_repeats"
+
+
+async def test_wording_changing_between_runs_does_not_defeat_it():
+    await run_pipeline(FILES, classifications=LABELS, findings=[model_finding()])
+
+    second_id, calls = await run_pipeline(
+        FILES,
+        classifications=LABELS,
+        findings=[model_finding(message="A totally different sentence this time")],
+        event=AFTER_A_PUSH,
+    )
+
+    assert [c for c in calls if c.url.path.endswith("/reviews")] == []
+    assert (await review_row(second_id))[0] == "all_repeats"
+
+
+async def test_a_genuinely_new_finding_still_gets_posted():
+    await run_pipeline(FILES, classifications=LABELS, findings=[model_finding()])
+
+    second_id, calls = await run_pipeline(
+        FILES,
+        classifications=LABELS,
+        findings=[model_finding(), model_finding(category="performance")],
+        event=AFTER_A_PUSH,
+    )
+
+    reviews = [c for c in calls if c.url.path.endswith("/reviews")]
+    assert len(reviews) == 1
+
+    body = json.loads(reviews[0].content)
+    assert len(body["comments"]) == 1
+
+    assert (await review_row(second_id))[0] == "posted"
+
+
+async def test_something_held_back_by_the_gate_is_not_a_repeat():
+    # Stored but never posted the first time, because confidence was too low.
+    # Nobody saw it, so saying it now is new rather than a repeat. This is why
+    # repeats are dropped after the gate rather than before it.
+    first_id, _ = await run_pipeline(
+        FILES, classifications=LABELS, findings=[model_finding(confidence=0.3)]
+    )
+    assert (await review_row(first_id))[0] == "no_findings"
+
+    second_id, calls = await run_pipeline(
+        FILES,
+        classifications=LABELS,
+        findings=[model_finding(confidence=0.9)],
+        event=AFTER_A_PUSH,
+    )
+
+    assert len([c for c in calls if c.url.path.endswith("/reviews")]) == 1
+    assert (await review_row(second_id))[0] == "posted"

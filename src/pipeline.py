@@ -4,6 +4,7 @@ import logging
 
 from src.common import trace
 from src.db.queries import (
+    previously_posted,
     record_posted_review,
     set_review_status,
     start_attempt,
@@ -11,6 +12,7 @@ from src.db.queries import (
 )
 from src.db.session import get_session_factory
 from src.filter.gate import apply_gate
+from src.filter.repeat import drop_repeats
 from src.github.client import GitHubClient
 from src.github.review import post_review
 from src.review_run import SKIP_NO_MODEL, review_pull_request
@@ -22,6 +24,7 @@ STATUS_RECEIVED = "received"
 STATUS_PROCESSING = "processing"
 STATUS_SKIPPED = "skipped"
 STATUS_NO_FINDINGS = "no_findings"
+STATUS_ALL_REPEATS = "all_repeats"
 STATUS_POSTING = "posting"
 STATUS_POSTED = "posted"
 STATUS_FAILED = "failed"
@@ -109,6 +112,27 @@ async def _record_and_post(
         )
         return
 
+    # Said after the gate, not before: a finding held back last time was never
+    # seen by anyone, so saying it now is new rather than a repeat.
+    repeated = drop_repeats(gate.post, await previously_posted(session, review_id))
+
+    trace.section(
+        "REPEATS",
+        f"{len(repeated.fresh)} new · {len(repeated.repeats)} already said",
+    )
+    for finding, earlier in repeated.repeats:
+        trace.item(
+            f"said before  {finding.file}:{finding.line}  "
+            f"({finding.category} at line {earlier.line} in an earlier review)"
+        )
+
+    if not repeated.fresh:
+        done(f"DONE  ·  {len(repeated.repeats)} findings, all said already")
+        await set_review_status(
+            session, review_id, expected=STATUS_PROCESSING, new=STATUS_ALL_REPEATS
+        )
+        return
+
     await set_review_status(
         session, review_id, expected=STATUS_PROCESSING, new=STATUS_POSTING
     )
@@ -117,7 +141,7 @@ async def _record_and_post(
         async with GitHubClient(event.installation_id, client=github_client) as github:
             posted = await post_review(
                 github, event.repo_full_name, event.pr_number, event.head_sha,
-                gate.post, held_back=len(gate.hold),
+                repeated.fresh, held_back=len(gate.hold),
             )
     except Exception:
         logger.exception("review %s could not be posted", review_id)
