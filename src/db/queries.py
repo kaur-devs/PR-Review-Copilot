@@ -17,13 +17,33 @@ In SQL that instruction is called ON CONFLICT DO NOTHING.
 
 from __future__ import annotations
 
-from sqlalchemy import select, update
+import logging
+from datetime import timedelta
+
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models import Finding, Installation, Repo, Review, WebhookEvent
 from src.filter.repeat import SaidBefore
 from src.webhooks.events import PullRequestEvent
+
+logger = logging.getLogger(__name__)
+
+
+# A review that has sat in one of these for longer than the timeout was
+# abandoned: the process handling it died. Nothing else will ever move it on,
+# because GitHub does not retry and the uniqueness rule refuses a second claim
+# on the same commit.
+UNFINISHED_STATUSES = ("received", "processing", "posting")
+
+# A whole review takes tens of seconds. Fifteen minutes is long enough that a
+# slow one is never mistaken for a dead one.
+STALE_AFTER = timedelta(minutes=15)
+
+# The attempts column exists to stop us retrying forever. A review that has
+# already been started this many times is not going to work on the next try.
+MAX_ATTEMPTS = 3
 
 
 async def record_delivery(
@@ -152,8 +172,56 @@ async def claim_review(
         .returning(Review.id)
     )
     result = await session.execute(statement)
+    review_id = result.scalar_one_or_none()
     await session.commit()
-    return result.scalar_one_or_none()
+
+    if review_id is not None:
+        return review_id
+
+    # The insert lost, so someone already holds this commit. That is normally
+    # correct and we stop here. But if the holder was abandoned part way
+    # through, nothing else is ever going to finish it.
+    return await reclaim_abandoned_review(session, repo_id, pull_request)
+
+
+async def reclaim_abandoned_review(
+    session: AsyncSession, repo_id: int, pull_request: PullRequestEvent
+) -> int | None:
+    """Take over a review of this commit that was left unfinished.
+
+    Returns its id if we took it, or None if there was nothing to take.
+
+    Written as one conditional update for the same reason claim_review uses
+    ON CONFLICT: reading the row and then deciding would let two deliveries
+    both decide to take over. The database runs one statement at a time, so
+    exactly one of them gets a row back.
+
+    The cutoff is computed by the database rather than in Python, so our clock
+    and the database's clock disagreeing cannot change the answer.
+
+    Note that "failed" is not in the list. A failed review was a decision, not
+    an abandonment, and quietly retrying it would hide whatever caused it.
+    """
+    result = await session.execute(
+        update(Review)
+        .where(
+            Review.repo_id == repo_id,
+            Review.pr_number == pull_request.pr_number,
+            Review.head_sha == pull_request.head_sha,
+            Review.status.in_(UNFINISHED_STATUSES),
+            Review.updated_at < func.now() - STALE_AFTER,
+            Review.attempts < MAX_ATTEMPTS,
+        )
+        .values(status="received", error_code=None)
+        .returning(Review.id)
+    )
+    review_id = result.scalar_one_or_none()
+    await session.commit()
+
+    if review_id is not None:
+        logger.info("took over review %s, abandoned part way through", review_id)
+
+    return review_id
 
 
 async def start_attempt(session: AsyncSession, review_id: int) -> None:
