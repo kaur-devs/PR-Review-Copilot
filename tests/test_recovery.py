@@ -16,10 +16,12 @@ from src.db.models import Review
 from src.db.queries import (
     MAX_ATTEMPTS,
     STALE_AFTER,
+    abandon_review,
     claim_review,
     ensure_repo,
     set_review_status,
     start_attempt,
+    stuck_reviews,
 )
 from src.db.session import get_session_factory
 from src.webhooks.events import PullRequestEvent
@@ -184,3 +186,125 @@ async def test_two_deliveries_arriving_together_cannot_both_take_over():
     # nothing abandoned to take.
     assert one == first
     assert two is None
+
+
+# ---------------------------------------------------------------------------
+# Finding what got stuck, and rebuilding enough to start it again
+# ---------------------------------------------------------------------------
+
+async def stuck():
+    async with get_session_factory()() as session:
+        return await stuck_reviews(session)
+
+
+async def test_nothing_is_stuck_to_begin_with():
+    assert await stuck() == []
+
+
+async def test_a_live_review_is_not_stuck():
+    review_id, _ = await claim()
+    await set_status(review_id, expected="received", new="processing")
+
+    assert await stuck() == []
+
+
+async def test_a_finished_review_is_never_stuck():
+    review_id, _ = await claim()
+    await set_status(review_id, expected="received", new="posted")
+    await age(review_id, STALE_AFTER * 2)
+
+    assert await stuck() == []
+
+
+async def test_an_abandoned_review_is_found():
+    review_id, _ = await claim()
+    await set_status(review_id, expected="received", new="processing")
+    await age(review_id, STALE_AFTER * 2)
+
+    found = await stuck()
+
+    assert [s.review_id for s in found] == [review_id]
+
+
+async def test_the_event_is_rebuilt_from_the_database():
+    review_id, _ = await claim()
+    await age(review_id, STALE_AFTER * 2)
+
+    event = (await stuck())[0].event
+
+    # Everything the review path actually reads comes back correct.
+    assert event.installation_id == EVENT.installation_id
+    assert event.repo_id == EVENT.repo_id
+    assert event.repo_full_name == EVENT.repo_full_name
+    assert event.pr_number == EVENT.pr_number
+    assert event.head_sha == EVENT.head_sha
+
+
+async def test_the_rebuilt_event_says_where_it_came_from():
+    review_id, _ = await claim()
+    await age(review_id, STALE_AFTER * 2)
+
+    event = (await stuck())[0].event
+
+    assert event.delivery_id == f"resumed-{review_id}"
+    assert event.action == "resumed"
+
+
+async def test_attempts_decide_whether_it_is_worth_retrying():
+    review_id, _ = await claim()
+    await age(review_id, STALE_AFTER * 2)
+    assert (await stuck())[0].can_retry
+
+    for _ in range(MAX_ATTEMPTS):
+        async with get_session_factory()() as session:
+            await start_attempt(session, review_id)
+    await age(review_id, STALE_AFTER * 2)
+
+    assert not (await stuck())[0].can_retry
+
+
+async def test_the_oldest_comes_first():
+    first, repo_id = await claim()
+    second, _ = await claim(replace(EVENT, head_sha="c" * 40, delivery_id="d-2"))
+
+    await age(second, STALE_AFTER * 2)
+    await age(first, STALE_AFTER * 4)
+
+    assert [s.review_id for s in await stuck()] == [first, second]
+
+
+# ---------------------------------------------------------------------------
+# Giving up on one that is out of attempts
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("stuck_in", ["received", "processing", "posting"])
+async def test_a_review_can_be_abandoned_from_any_unfinished_status(stuck_in):
+    review_id, _ = await claim()
+    if stuck_in != "received":
+        await set_status(review_id, expected="received", new=stuck_in)
+
+    async with get_session_factory()() as session:
+        assert await abandon_review(session, review_id, error_code="INTERRUPTED")
+
+    assert await row(review_id) == ("failed", 0, "INTERRUPTED")
+
+
+async def test_a_finished_review_is_not_abandoned():
+    review_id, _ = await claim()
+    await set_status(review_id, expected="received", new="posted")
+
+    async with get_session_factory()() as session:
+        assert not await abandon_review(session, review_id, error_code="INTERRUPTED")
+
+    assert (await row(review_id))[0] == "posted"
+
+
+async def test_an_abandoned_review_stops_showing_up_as_stuck():
+    review_id, _ = await claim()
+    await set_status(review_id, expected="received", new="processing")
+    await age(review_id, STALE_AFTER * 2)
+
+    async with get_session_factory()() as session:
+        await abandon_review(session, review_id, error_code="INTERRUPTED")
+
+    assert await stuck() == []
