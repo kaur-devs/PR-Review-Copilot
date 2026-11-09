@@ -24,7 +24,15 @@ from src.db.queries import (
     stuck_reviews,
 )
 from src.db.session import get_session_factory
+from src import recovery
+from src.recovery import (
+    ERROR_INTERRUPTED,
+    MAX_RESUMED_PER_START,
+    recover_interrupted_reviews,
+    start_recovery,
+)
 from src.webhooks.events import PullRequestEvent
+from tests.fakes import api_file, fake_github, fake_model, make_patch
 
 EVENT = PullRequestEvent(
     delivery_id="d-1",
@@ -308,3 +316,163 @@ async def test_an_abandoned_review_stops_showing_up_as_stuck():
         await abandon_review(session, review_id, error_code="INTERRUPTED")
 
     assert await stuck() == []
+
+
+# ---------------------------------------------------------------------------
+# Picking them up on startup
+# ---------------------------------------------------------------------------
+
+PATCH = make_patch(
+    ["def get_user(user_id):", "    return _USERS[user_id]", ""],
+    ["def get_user(user_id):", "    return _USERS.get(user_id)", ""],
+    start=17,
+)
+
+FILES = [[api_file("models.py", patch=PATCH)]]
+
+
+async def abandon(review_id, *, status="processing", older_by=None):
+    """Leave a review stuck, as a crash would."""
+    if status != "received":
+        await set_status(review_id, expected="received", new=status)
+    await age(review_id, older_by or STALE_AFTER * 2)
+
+
+async def recover(*, findings=None):
+    client, calls = fake_github(FILES)
+    model = fake_model(classifications={"models.py": "logic"}, findings=findings)
+    report = await recover_interrupted_reviews(
+        github_client=client, llm_client=model
+    )
+    return report, calls
+
+
+async def test_nothing_stuck_means_nothing_happens():
+    report, calls = await recover()
+
+    assert report.resumed == []
+    assert report.abandoned == []
+    assert calls == []
+
+
+async def test_a_live_review_is_left_alone():
+    review_id, _ = await claim()
+    await set_status(review_id, expected="received", new="processing")
+
+    report, calls = await recover()
+
+    assert report.resumed == []
+    assert (await row(review_id))[0] == "processing"
+
+
+async def test_an_interrupted_review_is_resumed_and_finishes():
+    review_id, _ = await claim()
+    await abandon(review_id)
+
+    report, _ = await recover(findings=[{
+        "file": "models.py", "line": 18, "severity": "high",
+        "category": "correctness", "message": "callers assume a user",
+        "rationale": "service.py reads user.email straight after.",
+        "confidence": 0.9,
+    }])
+
+    assert report.resumed == [review_id]
+    assert (await row(review_id))[0] == "posted"
+
+
+async def test_resuming_counts_as_another_attempt():
+    review_id, _ = await claim()
+    await abandon(review_id)
+    assert (await row(review_id))[1] == 0
+
+    await recover()
+
+    assert (await row(review_id))[1] == 1
+
+
+async def test_a_review_out_of_attempts_is_given_up_on_not_resumed():
+    review_id, _ = await claim()
+    for _ in range(MAX_ATTEMPTS):
+        async with get_session_factory()() as session:
+            await start_attempt(session, review_id)
+    await abandon(review_id)
+
+    report, calls = await recover()
+
+    assert report.abandoned == [review_id]
+    assert report.resumed == []
+    assert await row(review_id) == ("failed", MAX_ATTEMPTS, ERROR_INTERRUPTED)
+    assert calls == []
+
+
+async def test_only_a_few_are_resumed_per_start():
+    stuck_ids = []
+    for n in range(MAX_RESUMED_PER_START + 2):
+        review_id, _ = await claim(
+            replace(EVENT, head_sha=f"{n:040d}", delivery_id=f"d-{n}")
+        )
+        await abandon(review_id)
+        stuck_ids.append(review_id)
+
+    report, _ = await recover()
+
+    assert len(report.resumed) == MAX_RESUMED_PER_START
+    assert len(report.left_for_next_time) == 2
+
+
+async def test_what_is_left_over_is_found_on_the_next_start():
+    for n in range(MAX_RESUMED_PER_START + 1):
+        review_id, _ = await claim(
+            replace(EVENT, head_sha=f"{n:040d}", delivery_id=f"d-{n}")
+        )
+        await abandon(review_id)
+
+    first, _ = await recover()
+    leftover = first.left_for_next_time[0]
+
+    # It is still stuck, so a second start picks it up.
+    await age(leftover, STALE_AFTER * 2)
+    second, _ = await recover()
+
+    assert second.resumed == [leftover]
+
+
+async def test_one_review_failing_does_not_stop_the_others(monkeypatch):
+    bad, _ = await claim()
+    await abandon(bad)
+    good, _ = await claim(replace(EVENT, head_sha="c" * 40, delivery_id="d-2"))
+    await abandon(good, older_by=STALE_AFTER)
+
+    real = recovery.process_pull_request
+    calls = []
+
+    async def explode_once(event, review_id, **kwargs):
+        calls.append(review_id)
+        if review_id == bad:
+            raise RuntimeError("the network fell over")
+        return await real(event, review_id, **kwargs)
+
+    monkeypatch.setattr(recovery, "process_pull_request", explode_once)
+
+    report, _ = await recover()
+
+    assert calls == [bad, good]
+    assert report.resumed == [good]
+
+
+async def test_recovery_can_be_switched_off(monkeypatch):
+    monkeypatch.setenv("RECOVERY_ON_STARTUP", "0")
+
+    assert start_recovery() is None
+
+
+async def test_the_app_starts_recovery_when_it_is_switched_on(monkeypatch):
+    monkeypatch.setenv("RECOVERY_ON_STARTUP", "1")
+    review_id, _ = await claim()
+    await abandon(review_id)
+
+    task = start_recovery()
+    assert task is not None
+    report = await task
+
+    assert report.resumed == [review_id]
