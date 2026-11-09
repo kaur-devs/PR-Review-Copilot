@@ -34,6 +34,10 @@ os.environ["LLM_MODEL"] = "test-model"
 # The development trace would drown the test output.
 os.environ["PIPELINE_TRACE"] = "0"
 
+# Startup recovery is tested on purpose, in tests/test_recovery.py. Leaving it
+# on would mean every test that starts the app spawns a background scan.
+os.environ["RECOVERY_ON_STARTUP"] = "0"
+
 # A throwaway private key, generated fresh each run.
 #
 # It has to be a genuine RSA key rather than a placeholder, because the

@@ -445,3 +445,19 @@ async def abandon_review(
     )
     await session.commit()
     return result.rowcount == 1
+
+
+async def reopen_review(session: AsyncSession, review_id: int) -> bool:
+    """Put a stuck review back to waiting, so the pipeline will take it.
+
+    The pipeline only starts a review that is in "received", which is correct:
+    it stops two things working on the same review. A review abandoned in
+    "processing" therefore has to be moved back before it can be resumed.
+    """
+    result = await session.execute(
+        update(Review)
+        .where(Review.id == review_id, Review.status.in_(UNFINISHED_STATUSES))
+        .values(status="received", error_code=None)
+    )
+    await session.commit()
+    return result.rowcount == 1

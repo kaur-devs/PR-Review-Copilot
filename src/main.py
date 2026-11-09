@@ -5,6 +5,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from src.config import get_settings
+from src.recovery import start_recovery
 from src.webhooks.router import router as webhook_router
 
 logging.basicConfig(
@@ -22,7 +23,19 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info("starting, GitHub App id %s", settings.app_id)
+
+    # Started, not awaited. A review interrupted by the last restart must not
+    # delay this one from listening: GitHub allows ten seconds per delivery
+    # and never retries, so being slow to start loses messages outright.
+    recovery = start_recovery()
+
     yield
+
+    # Cancelling mid-review leaves it in "processing", which is exactly the
+    # state recovery looks for, so the next start picks it up again.
+    if recovery is not None and not recovery.done():
+        recovery.cancel()
+
     logger.info("shutting down")
 
 
