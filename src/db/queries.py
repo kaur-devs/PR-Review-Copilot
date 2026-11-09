@@ -18,6 +18,7 @@ In SQL that instruction is called ON CONFLICT DO NOTHING.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import timedelta
 
 from sqlalchemy import func, select, update
@@ -44,6 +45,19 @@ STALE_AFTER = timedelta(minutes=15)
 # The attempts column exists to stop us retrying forever. A review that has
 # already been started this many times is not going to work on the next try.
 MAX_ATTEMPTS = 3
+
+
+@dataclass(frozen=True)
+class StuckReview:
+    """A review left unfinished, with enough to start it again."""
+
+    review_id: int
+    attempts: int
+    event: PullRequestEvent
+
+    @property
+    def can_retry(self) -> bool:
+        return self.attempts < MAX_ATTEMPTS
 
 
 async def record_delivery(
@@ -360,3 +374,74 @@ async def previously_posted(
 
     return [SaidBefore(file=file, line=line, category=category)
             for file, line, category in rows]
+
+
+async def stuck_reviews(session: AsyncSession) -> list[StuckReview]:
+    """Every review left unfinished past the timeout, oldest first.
+
+    The event is rebuilt from the database rather than kept anywhere, which is
+    the whole reason the pipeline takes a small object instead of a webhook
+    payload. Three tables are needed for it: the review knows the pull request
+    and the commit, the repository knows its name and GitHub's id for it, and
+    the installation knows the number we need to get a token.
+
+    base_sha comes back empty because it is not stored. Nothing in the review
+    path reads it; if something ever does, it needs a column first.
+    """
+    rows = await session.execute(
+        select(
+            Review.id,
+            Review.attempts,
+            Review.pr_number,
+            Review.head_sha,
+            Repo.github_repo_id,
+            Repo.full_name,
+            Installation.github_installation_id,
+        )
+        .join(Repo, Review.repo_id == Repo.id)
+        .join(Installation, Repo.installation_id == Installation.id)
+        .where(
+            Review.status.in_(UNFINISHED_STATUSES),
+            Review.updated_at < func.now() - STALE_AFTER,
+        )
+        .order_by(Review.updated_at)
+    )
+
+    return [
+        StuckReview(
+            review_id=review_id,
+            attempts=attempts,
+            event=PullRequestEvent(
+                delivery_id=f"resumed-{review_id}",
+                action="resumed",
+                installation_id=github_installation_id,
+                repo_id=github_repo_id,
+                repo_full_name=full_name,
+                pr_number=pr_number,
+                head_sha=head_sha,
+                base_sha="",
+            ),
+        )
+        for (
+            review_id, attempts, pr_number, head_sha,
+            github_repo_id, full_name, github_installation_id,
+        ) in rows
+    ]
+
+
+async def abandon_review(
+    session: AsyncSession, review_id: int, *, error_code: str
+) -> bool:
+    """Give up on a review that is out of attempts.
+
+    set_review_status needs to know the status it is moving from, and a stuck
+    review could be in any of three. This accepts all of them, so the row
+    stops claiming to be in progress when nothing is working on it.
+    """
+    result = await session.execute(
+        update(Review)
+        .where(Review.id == review_id, Review.status.in_(UNFINISHED_STATUSES))
+        .values(status="failed", error_code=error_code)
+    )
+    await session.commit()
+    return result.rowcount == 1
