@@ -97,20 +97,28 @@ async def test_the_file_is_read_at_the_reviewed_commit():
     assert reads[0].url.params["ref"] == EVENT.head_sha
 
 
-async def test_a_broken_suggestion_is_dropped_but_the_finding_stays():
-    # De-indented out of its function. Both checks reject this; compile() gets
-    # there first, which is why the reason is about parsing rather than
-    # indentation. The indentation check has its own test, on a file where
-    # the shifted line still compiles.
+async def test_a_suggestion_the_model_forgot_to_indent_is_shifted_into_place():
     outcome, _ = await run(
-        findings=[finding(suggestion="return total / len(values) or 0")],
+        findings=[finding(suggestion="return total / len(values) if values else 0.0")],
+        contents={"app/stats.py": FILE},
+    )
+
+    assert outcome.suggestions.offered == 1
+    assert outcome.findings[0].suggestion == (
+        "    return total / len(values) if values else 0.0"
+    )
+
+
+async def test_a_suggestion_that_will_not_compile_is_dropped_but_the_finding_stays():
+    outcome, _ = await run(
+        findings=[finding(suggestion="    return total / len(values")],
         contents={"app/stats.py": FILE},
     )
 
     assert len(outcome.findings) == 1
     assert outcome.findings[0].suggestion is None
     assert outcome.findings[0].message == finding()["message"]
-    assert outcome.suggestions.refused[0][1]
+    assert "stop the file parsing" in outcome.suggestions.refused[0][1]
 
 
 async def test_a_file_that_cannot_be_read_drops_the_suggestion_only():
@@ -121,12 +129,20 @@ async def test_a_file_that_cannot_be_read_drops_the_suggestion_only():
     assert outcome.suggestions.offered == 0
 
 
-async def test_a_medium_severity_finding_costs_no_network_call():
+async def test_a_low_severity_finding_costs_no_network_call():
     _, calls = await run(
-        findings=[finding(severity="medium")], contents={"app/stats.py": FILE}
+        findings=[finding(severity="low")], contents={"app/stats.py": FILE}
     )
 
     assert [c for c in calls if "/contents/" in c.url.path] == []
+
+
+async def test_a_medium_severity_finding_now_gets_a_suggestion():
+    outcome, _ = await run(
+        findings=[finding(severity="medium")], contents={"app/stats.py": FILE}
+    )
+
+    assert outcome.suggestions.offered == 1
 
 
 async def test_no_suggestions_at_all_costs_no_network_call():

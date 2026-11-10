@@ -3,6 +3,7 @@ from src.filter.suggest import (
     apply_to_source,
     is_valid_python,
     keeps_its_place,
+    realign,
     files_to_read,
     passes_cheap_checks,
     settle,
@@ -54,11 +55,21 @@ def test_a_sound_replacement_survives_parsing():
     assert survives_parsing(SOURCE, 3, "    return total / max(len(values), 1)").allow
 
 
-def test_a_replacement_indented_wrong_is_caught():
-    decision = survives_parsing(SOURCE, 3, "return total / len(values)")
+def test_a_replacement_the_model_forgot_to_indent_is_shifted_into_place():
+    # The common model mistake: the right fix at column zero.
+    decision = survives_parsing(SOURCE, 3, "return total / max(len(values), 1)")
+
+    assert decision.allow
+    assert decision.suggestion == "    return total / max(len(values), 1)"
+
+
+def test_a_replacement_indented_with_the_wrong_character_is_refused():
+    tabbed = "def average(values):\n\treturn sum(values) / len(values)\n"
+
+    decision = survives_parsing(tabbed, 2, "    return 0.0")
 
     assert not decision.allow
-    assert "stop the file parsing" in decision.reason
+    assert "indented differently" in decision.reason
 
 
 def test_a_replacement_that_is_not_python_is_caught():
@@ -82,11 +93,17 @@ def test_a_finding_with_no_suggestion_is_not_a_candidate():
     assert not passes_cheap_checks(make(suggestion=None)).allow
 
 
-def test_medium_severity_does_not_carry_a_suggestion():
-    decision = passes_cheap_checks(make(severity="medium"))
+def test_medium_severity_carries_a_suggestion():
+    # Severity is the model's opinion about impact. On the first live run it
+    # called a crash "medium" and three correct suggestions were thrown away.
+    assert passes_cheap_checks(make(severity="medium")).allow
+
+
+def test_low_severity_does_not_carry_a_suggestion():
+    decision = passes_cheap_checks(make(severity="low"))
 
     assert not decision.allow
-    assert "medium severity" in decision.reason
+    assert "low severity" in decision.reason
 
 
 def test_confidence_below_the_bar_does_not_carry_a_suggestion():
@@ -106,7 +123,7 @@ def test_a_finding_the_judge_could_not_confirm_does_not_carry_a_suggestion():
 
 
 def test_only_candidate_files_are_worth_reading():
-    assert files_to_read([make(), make(severity="low")]) == {"app/stats.py"}
+    assert files_to_read([make(), make(confidence=0.1)]) == {"app/stats.py"}
     assert files_to_read([make(suggestion=None)]) == set()
 
 
@@ -119,7 +136,7 @@ def test_a_sound_suggestion_is_kept():
 
 
 def test_a_refused_suggestion_still_leaves_the_comment():
-    outcome = settle([make(severity="medium")], sources={"app/stats.py": SOURCE})
+    outcome = settle([make(confidence=0.4)], sources={"app/stats.py": SOURCE})
 
     assert len(outcome.findings) == 1
     assert outcome.findings[0].suggestion is None
@@ -202,3 +219,103 @@ def test_what_cpython_rejects():
     assert not is_valid_python("def f():\n    pass\nreturn 1\n")
     assert not is_valid_python("def f():\n    x = 1\n      y = 2\n")
     assert not is_valid_python("x = 'unclosed\n")
+
+
+# ---------------------------------------------------------------------------
+# Shifting a suggestion into place
+# ---------------------------------------------------------------------------
+
+# The real shape from the first live run: a dict literal inside a function,
+# where the model returned the replacement at column zero.
+RETURNS_A_DICT = '''def retrieve_context(db, repo_id, question):
+    similar_chunks = search(db, repo_id, question)
+    sources = []
+
+    return {
+        "primary_chunks": similar_chunks,
+        "linked_chunks": [],
+    }
+'''
+
+
+def test_the_case_from_the_first_live_run():
+    # Line 6 is '        "primary_chunks": similar_chunks,' - eight spaces.
+    decision = survives_parsing(
+        RETURNS_A_DICT, 6, '"chunks": similar_chunks,'
+    )
+
+    assert decision.allow
+    assert decision.suggestion == '        "chunks": similar_chunks,'
+
+
+def test_an_already_correct_suggestion_is_left_exactly_as_it_is():
+    text = "    return total / len(values) if values else 0.0"
+
+    assert realign(SOURCE, 3, text) == text
+
+
+def test_a_multi_line_suggestion_keeps_its_own_shape():
+    shifted = realign(SOURCE, 3, "if not values:\n    return 0.0\nreturn total / len(values)")
+
+    assert shifted.splitlines() == [
+        "    if not values:",
+        "        return 0.0",
+        "    return total / len(values)",
+    ]
+
+
+def test_an_over_indented_suggestion_is_shifted_back():
+    assert realign(SOURCE, 3, "            return 0.0") == "    return 0.0"
+
+
+def test_blank_lines_are_not_given_trailing_whitespace():
+    shifted = realign(SOURCE, 3, "x = 1\n\ny = 2")
+
+    assert shifted.splitlines() == ["    x = 1", "", "    y = 2"]
+
+
+def test_a_block_with_nothing_to_give_up_is_not_shifted():
+    # Shifting left by four would have to eat whitespace the second line does
+    # not have, so the shift is refused rather than guessed at.
+    assert realign(SOURCE, 3, "        if values:\n  pass") is None
+
+
+def test_shifting_preserves_relative_shape_and_leaves_the_rest_to_compile():
+    # Both lines move by the same amount, which keeps their difference. That
+    # is correct even when the difference was nonsense to begin with, and the
+    # compile check is what rejects it.
+    shifted = realign(SOURCE, 3, "        if values:\n     pass")
+
+    assert shifted == "    if values:\n pass"
+    assert not is_valid_python(apply_to_source(SOURCE, 3, shifted))
+
+
+def test_tabs_and_spaces_cannot_be_shifted_into_each_other():
+    tabbed = "def f():\n\treturn 1\n"
+
+    assert realign(tabbed, 2, "    return 2") is None
+    assert realign(SOURCE, 3, "\treturn 2") is None
+
+
+def test_a_blank_suggestion_cannot_be_shifted():
+    assert realign(SOURCE, 3, "   \n  ") is None
+
+
+def test_a_shifted_suggestion_is_what_reaches_the_finding():
+    outcome = settle(
+        [make(suggestion="return total / max(len(values), 1)")],
+        sources={"app/stats.py": SOURCE},
+    )
+
+    assert outcome.offered == 1
+    assert outcome.findings[0].suggestion == "    return total / max(len(values), 1)"
+
+
+def test_shifting_does_not_rescue_a_suggestion_that_will_not_compile():
+    outcome = settle(
+        [make(suggestion="return total / len(values")],
+        sources={"app/stats.py": SOURCE},
+    )
+
+    assert outcome.offered == 0
+    assert "stop the file parsing" in outcome.refused[0][1]

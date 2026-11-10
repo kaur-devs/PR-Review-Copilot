@@ -34,8 +34,12 @@ Rules:
 - Never restate what the code does.
 - One finding per problem. Do not repeat yourself.
 - suggestion replaces that one line completely. If the line should stay, put
-  it back in your replacement. Keep the original indentation exactly. Use
-  null unless the fix is a small, local edit you are sure about."""
+  it back in your replacement. Use null unless the fix is a small, local edit
+  you are sure about.
+- In the diff, each line is shown as a number, then + - or a space, then the
+  line itself. Everything after that marker is the real line, indentation
+  included. Start your suggestion at the same indentation as the line you are
+  replacing, and indent any further lines relative to that."""
 
 QUESTIONS = {
     API: """This change touches a route, endpoint or public interface. Ask:
