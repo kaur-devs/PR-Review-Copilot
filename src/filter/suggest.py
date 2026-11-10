@@ -29,14 +29,17 @@ import os
 from dataclasses import dataclass, field, replace
 from typing import Collection, Mapping
 
-from src.review.findings import SEVERITY_HIGH, Finding
+from src.review.findings import SEVERITY_HIGH, SEVERITY_MEDIUM, Finding
 
 logger = logging.getLogger(__name__)
 
-# Deliberately stricter than the posting gate in src/filter/gate.py, which
-# posts high and medium at 0.6. Start here and widen only if the evaluation
-# harness shows it refuses everything.
-SUGGESTABLE_SEVERITIES = frozenset({SEVERITY_HIGH})
+# Stricter than the posting gate in src/filter/gate.py, which posts at 0.6.
+# This started at high severity only, and on the first live run that refused
+# three correct, well-formed suggestions because the model had labelled a
+# crash "medium". Severity is the model's opinion about impact; confidence and
+# the judge are what say whether the finding is real, so those carry the gate
+# and severity no longer does.
+SUGGESTABLE_SEVERITIES = frozenset({SEVERITY_HIGH, SEVERITY_MEDIUM})
 MINIMUM_CONFIDENCE = 0.8
 
 # A suggestion is posted inside a fenced block, so a suggestion containing a
@@ -54,6 +57,10 @@ def suggestions_enabled() -> bool:
 class SuggestionDecision:
     allow: bool
     reason: str = ""
+
+    # The text to post, which may have been shifted to line up with the code
+    # it replaces. None when nothing was changed or nothing is allowed.
+    suggestion: str | None = None
 
 
 @dataclass
@@ -102,6 +109,51 @@ def _indentation(line: str) -> str:
     return line[: len(line) - len(line.lstrip())]
 
 
+def realign(source: str, line: int, suggestion: str) -> str | None:
+    """The suggestion shifted to start where the line it replaces starts.
+
+    The model knows the fix and routinely gets the whitespace wrong: asked to
+    replace a line eight spaces deep inside a dict, it returns the replacement
+    at column zero. Refusing those was correct but wasteful, because only the
+    indentation was wrong.
+
+    So the whole block is shifted by one amount, which preserves the
+    replacement's own internal shape. Returns None when the shift is not
+    well defined, and the caller refuses as before. Nothing here is trusted:
+    the result still has to compile and still has to land in the right place.
+    """
+    body = suggestion.splitlines()
+    first = next((text for text in body if text.strip()), None)
+    if first is None:
+        return None
+
+    target = _indentation(source.splitlines()[line - 1])
+    current = _indentation(first)
+
+    if current == target:
+        return suggestion
+
+    if target.startswith(current):
+        extra = target[len(current):]
+        return "\n".join(
+            text if not text.strip() else extra + text for text in body
+        )
+
+    if current.startswith(target):
+        remove = len(current) - len(target)
+        # Only safe if every line really has that much whitespace to give up.
+        if any(
+            len(_indentation(text)) < remove for text in body if text.strip()
+        ):
+            return None
+        return "\n".join(
+            text if not text.strip() else text[remove:] for text in body
+        )
+
+    # One indents with tabs and the other with spaces. Not shiftable.
+    return None
+
+
 def keeps_its_place(source: str, line: int, suggestion: str) -> SuggestionDecision:
     """Whether the replacement starts at the same indentation as what it replaces.
 
@@ -132,14 +184,29 @@ def survives_parsing(source: str, line: int, suggestion: str) -> SuggestionDecis
         # guess: an unverified suggestion should not get an Apply button.
         return SuggestionDecision(False, "the file does not parse as it is")
 
-    patched = apply_to_source(source, line, suggestion)
+    if not 1 <= line <= len(source.splitlines()):
+        return SuggestionDecision(False, f"line {line} is not in the file")
+
+    # Shifted before anything is checked, so what gets compiled and what gets
+    # posted are the same text.
+    shifted = realign(source, line, suggestion)
+    if shifted is None:
+        return SuggestionDecision(
+            False, "it is indented differently from the line it replaces"
+        )
+
+    patched = apply_to_source(source, line, shifted)
     if patched is None:
         return SuggestionDecision(False, f"line {line} is not in the file")
 
     if not is_valid_python(patched):
         return SuggestionDecision(False, "applying it would stop the file parsing")
 
-    return keeps_its_place(source, line, suggestion)
+    placed = keeps_its_place(source, line, shifted)
+    if not placed.allow:
+        return placed
+
+    return SuggestionDecision(True, suggestion=shifted)
 
 
 def passes_cheap_checks(
@@ -211,6 +278,8 @@ def settle(
                 )
 
         if decision.allow:
+            if decision.suggestion and decision.suggestion != finding.suggestion:
+                finding = replace(finding, suggestion=decision.suggestion)
             outcome.findings.append(finding)
             continue
 
