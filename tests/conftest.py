@@ -38,6 +38,12 @@ os.environ["PIPELINE_TRACE"] = "0"
 # on would mean every test that starts the app spawns a background scan.
 os.environ["RECOVERY_ON_STARTUP"] = "0"
 
+# The agentic pipeline is tested on purpose, in tests/test_graph.py, with a
+# model that answers the specialist prompts. Most tests here exercise the
+# single-pass pipeline and would otherwise take a path their fake model
+# cannot answer, failing for a reason that has nothing to do with them.
+os.environ["AGENTIC_PIPELINE"] = "0"
+
 # A throwaway private key, generated fresh each run.
 #
 # It has to be a genuine RSA key rather than a placeholder, because the

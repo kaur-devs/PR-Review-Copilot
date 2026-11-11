@@ -11,10 +11,11 @@ from src.db.queries import (
     store_findings,
 )
 from src.db.session import get_session_factory
-from src.filter.gate import apply_gate
+from src.filter.gate import GateResult, apply_gate
 from src.filter.repeat import drop_repeats
 from src.github.client import GitHubClient
 from src.github.review import post_review
+from src.agentic_run import agentic_enabled, review_pull_request_with_agents
 from src.review_run import SKIP_NO_MODEL, review_pull_request
 from src.webhooks.events import PullRequestEvent
 
@@ -66,9 +67,17 @@ async def _record_and_post(
         f"·  {event.head_sha[:7]}"
     )
 
-    outcome = await review_pull_request(
-        event, github_client=github_client, llm_client=llm_client
-    )
+    if agentic_enabled():
+        outcome = await review_pull_request_with_agents(
+            event,
+            github_client=github_client,
+            llm_client=llm_client,
+            already_said=await previously_posted(session, review_id),
+        )
+    else:
+        outcome = await review_pull_request(
+            event, github_client=github_client, llm_client=llm_client
+        )
 
     await set_review_status(
         session, review_id, expected=STATUS_PROCESSING, new=STATUS_PROCESSING,
@@ -99,7 +108,14 @@ async def _record_and_post(
     stored = await store_findings(session, review_id, outcome.findings)
     logger.info("review %s: %s findings stored", review_id, stored)
 
-    gate = apply_gate(outcome.findings)
+    # The graph runs the gates itself, in a different order, so that
+    # nothing is verified that could never be posted. Re-running them
+    # here would be harmless but would report the held-back count twice.
+    gate = (
+        GateResult(post=outcome.findings, hold=outcome.held)
+        if agentic_enabled()
+        else apply_gate(outcome.findings)
+    )
 
     trace.section("GATE", f"{len(gate.post)} to post · {len(gate.hold)} held back")
     for finding, reason in gate.hold:
@@ -142,6 +158,7 @@ async def _record_and_post(
             posted = await post_review(
                 github, event.repo_full_name, event.pr_number, event.head_sha,
                 repeated.fresh, held_back=len(gate.hold),
+                summary=outcome.summary,
             )
     except Exception:
         logger.exception("review %s could not be posted", review_id)
