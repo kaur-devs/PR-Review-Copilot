@@ -7,7 +7,7 @@ from src.classification.kinds import API, DOCS, LOGIC, RULE_BASED, Classificatio
 from src.context.bundle import ContextBundle, ContextItem
 from src.diff.parse import parse_patch
 from src.review.findings import Finding
-from src.review.generate import MAX_SUGGESTION_LENGTH, _read_finding, generate
+from src.review.generate import MAX_SUGGESTION_LENGTH, generate, read_finding
 from src.review.prompts import build_system_prompt, build_user_prompt
 from src.review.provider import LLMProvider
 
@@ -284,20 +284,20 @@ def test_a_line_with_no_number_does_not_crash_the_prompt():
 
 
 def test_a_suggestion_is_read_when_the_model_offers_one():
-    finding, reason = _read_finding(
+    finding, reason = read_finding(
         _entry(suggestion="    return total / len(chunks) if chunks else 0.0"),
         {"app/service.py": diff_for("app/service.py")},
-        ContextBundle(),
+        (),
     )
 
     assert finding.suggestion == "    return total / len(chunks) if chunks else 0.0"
 
 
 def test_a_suggestion_keeps_its_indentation():
-    finding, _ = _read_finding(
+    finding, _ = read_finding(
         _entry(suggestion="        if not chunks:\n            return 0.0\n"),
         {"app/service.py": diff_for("app/service.py")},
-        ContextBundle(),
+        (),
     )
 
     assert finding.suggestion.startswith("        if not chunks:")
@@ -306,10 +306,10 @@ def test_a_suggestion_keeps_its_indentation():
 
 def test_no_suggestion_is_the_normal_case():
     for value in [None, "", "   ", "\n\n", 42, [], {"a": 1}]:
-        finding, _ = _read_finding(
+        finding, _ = read_finding(
             _entry(suggestion=value),
             {"app/service.py": diff_for("app/service.py")},
-            ContextBundle(),
+            (),
         )
 
         assert finding is not None, "a bad suggestion must not drop the finding"
@@ -320,7 +320,7 @@ def test_a_finding_with_no_suggestion_key_at_all_still_parses():
     entry = _entry()
     entry.pop("suggestion", None)
 
-    finding, reason = _read_finding(
+    finding, reason = read_finding(
         entry, {"app/service.py": diff_for("app/service.py")}, ContextBundle()
     )
 
@@ -329,10 +329,58 @@ def test_a_finding_with_no_suggestion_key_at_all_still_parses():
 
 
 def test_an_enormous_suggestion_is_cut_short():
-    finding, _ = _read_finding(
+    finding, _ = read_finding(
         _entry(suggestion="x = 1\n" * 500),
         {"app/service.py": diff_for("app/service.py")},
-        ContextBundle(),
+        (),
     )
 
     assert len(finding.suggestion) <= MAX_SUGGESTION_LENGTH
+
+
+# ------------------------------------------------- cross-file findings
+
+def test_a_finding_about_an_untouched_file_is_moved_onto_the_cause():
+    """Seen on the first real run: an agent found that chat.py:86 reads
+    keys retrieve_context no longer returns. A real cross-file break, in
+    a file the pull request never touched, and it was thrown away.
+
+    Finding those is the whole reason for running agents, so it is
+    anchored on the change that caused it instead."""
+    entry = _entry(
+        file="backend/app/routers/chat.py",
+        line=86,
+        message="reads keys that are no longer provided",
+        affects=["backend/app/routers/chat.py:86"],
+        evidence_files=["app/service.py"],
+    )
+
+    finding, reason = read_finding(
+        entry, {"app/service.py": diff_for("app/service.py")},
+        allow_reanchor=True,
+    )
+
+    assert finding is not None, reason
+    assert finding.file == "app/service.py"
+    assert "breaks backend/app/routers/chat.py:86" in finding.message
+
+
+def test_the_single_pass_generator_still_refuses_a_file_outside_the_diff():
+    """It only ever sees the diff, so a path outside it is a mistake,
+    not a discovery."""
+    finding, reason = read_finding(
+        _entry(file="somewhere/else.py"),
+        {"app/service.py": diff_for("app/service.py")},
+    )
+
+    assert finding is None
+    assert reason == "that file is not in this change"
+
+
+def test_a_cross_file_finding_with_nothing_to_anchor_to_is_still_dropped():
+    finding, reason = read_finding(
+        _entry(file="somewhere/else.py"), {}, allow_reanchor=True
+    )
+
+    assert finding is None
+    assert "nothing in it fits" in reason

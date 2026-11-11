@@ -46,6 +46,13 @@ class ReviewOutcome:
     seconds: float = 0.0
     skipped: str | None = None
 
+    # Produced by the agentic pipeline only. The single-pass one writes no
+    # summary, holds nothing back past the gate it already reports, and
+    # has no turns to count.
+    summary: str = ""
+    held: list[tuple[Finding, str]] = field(default_factory=list)
+    turns: int = 0
+
     @property
     def ran(self) -> bool:
         return self.skipped is None

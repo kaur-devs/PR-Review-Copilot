@@ -9,6 +9,7 @@ from pathlib import Path
 
 import httpx
 
+from src.context.languages import REVIEWABLE_SUFFIXES
 from src.github.auth import API_HEADERS, GITHUB_API, get_installation_token
 
 logger = logging.getLogger(__name__)
@@ -17,7 +18,10 @@ MAX_ARCHIVE_BYTES = 50 * 1024 * 1024
 MAX_FILE_BYTES = 1024 * 1024
 DOWNLOAD_TIMEOUT_SECONDS = 60.0
 
-SOURCE_SUFFIXES = frozenset({".py"})
+# Which files are worth unpacking. Taken from the language registry rather
+# than listed again here: a language we cannot parse is one we cannot use,
+# and a snapshot missing the file is indistinguishable from a deleted one.
+SOURCE_SUFFIXES = REVIEWABLE_SUFFIXES
 
 IGNORED_DIRECTORIES = frozenset({
     ".git",

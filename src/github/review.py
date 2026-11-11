@@ -48,7 +48,23 @@ def build_comment_body(finding: Finding) -> str:
     return "\n".join(parts)
 
 
-def build_review_body(posted: list[Finding], held: int) -> str:
+def build_review_body(
+    posted: list[Finding], held: int, summary: str = ""
+) -> str:
+    """The text above the inline comments.
+
+    When a summary was written it replaces the terse counts, because it
+    already says how many comments there are and what they are about.
+    The counts stay as the fallback for when the summary call failed.
+    """
+    if summary:
+        if held:
+            return (
+                f"{summary}\n\n<sub>{held} further finding(s) were recorded "
+                "but not posted, being low severity or low confidence.</sub>"
+            )
+        return summary
+
     if not posted:
         return "No issues found."
 
@@ -56,8 +72,8 @@ def build_review_body(posted: list[Finding], held: int) -> str:
     for finding in posted:
         counts[finding.severity] = counts.get(finding.severity, 0) + 1
 
-    summary = ", ".join(f"{n} {severity}" for severity, n in counts.items())
-    lines = [f"Found {len(posted)} issue(s): {summary}."]
+    by_severity = ", ".join(f"{n} {severity}" for severity, n in counts.items())
+    lines = [f"Found {len(posted)} issue(s): {by_severity}."]
 
     suggested = sum(1 for finding in posted if finding.suggestion)
     if suggested:
@@ -124,6 +140,7 @@ async def post_review(
     findings: list[Finding],
     *,
     held_back: int = 0,
+    summary: str = "",
 ) -> PostedReview:
     to_post = findings[:MAX_COMMENTS_PER_REVIEW]
     if len(findings) > MAX_COMMENTS_PER_REVIEW:
@@ -136,7 +153,7 @@ async def post_review(
     payload = {
         "commit_id": head_sha,
         "event": EVENT_COMMENT,
-        "body": build_review_body(to_post, held_back),
+        "body": build_review_body(to_post, held_back, summary),
         "comments": build_comments(to_post),
     }
 

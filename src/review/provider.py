@@ -32,6 +32,11 @@ HEADER_RESET_TOKENS = "x-ratelimit-reset-tokens"
 # Roughly four characters to a token. Good enough to decide whether to wait.
 CHARACTERS_PER_TOKEN = 4
 
+# What the provider says about why it stopped. "tool_calls" means the model
+# wants something run before it can answer.
+FINISH_STOP = "stop"
+FINISH_TOOL_CALLS = "tool_calls"
+
 
 class LLMError(Exception):
     pass
@@ -130,6 +135,48 @@ class QuotaCounter:
         self.retries = 0
         self.waited_seconds = 0.0
 
+    def as_json(self) -> dict:
+        return {
+            "requests": self.requests,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "retries": self.retries,
+            "waited_seconds": round(self.waited_seconds, 1),
+        }
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    """One request from the model to run a tool.
+
+    The arguments arrive as a JSON string rather than an object, and the
+    model does sometimes get that string wrong, so parsing is kept separate
+    from reading the response. A badly formed call should be answered with
+    an error the model can read, not crash the loop.
+    """
+
+    id: str
+    name: str
+    arguments: str
+
+    def parsed(self) -> dict:
+        try:
+            value = json.loads(self.arguments or "{}")
+        except json.JSONDecodeError as error:
+            raise InvalidResponse(
+                f"{self.name} was called with arguments that are not JSON: {error}"
+            )
+        if not isinstance(value, dict):
+            raise InvalidResponse(f"{self.name} was called with {type(value).__name__}")
+        return value
+
+    def as_wire(self) -> dict:
+        return {
+            "id": self.id,
+            "type": "function",
+            "function": {"name": self.name, "arguments": self.arguments},
+        }
+
 
 @dataclass(frozen=True)
 class Completion:
@@ -138,6 +185,12 @@ class Completion:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     attempts: int = 1
+    finish_reason: str = FINISH_STOP
+    tool_calls: tuple[ToolCall, ...] = ()
+
+    @property
+    def wants_tools(self) -> bool:
+        return bool(self.tool_calls)
 
     def as_json(self) -> dict:
         try:
@@ -145,9 +198,74 @@ class Completion:
         except json.JSONDecodeError as error:
             raise InvalidResponse(f"the model did not return valid JSON: {error}")
 
+    def as_message(self) -> dict:
+        """The assistant turn, ready to append to the conversation.
+
+        A tool result is only accepted if the assistant message that asked
+        for it is already in the history, so the loop appends this before
+        any answer it produces.
+        """
+        message: dict = {"role": "assistant", "content": self.text or None}
+        if self.tool_calls:
+            message["tool_calls"] = [call.as_wire() for call in self.tool_calls]
+        return message
+
+
+def tool_result_message(call: ToolCall, content: str) -> dict:
+    """What a tool returned, addressed to the call that asked for it."""
+    return {"role": "tool", "tool_call_id": call.id, "content": content}
+
 
 quota = QuotaCounter()
 rate_limit = RateLimitState()
+
+
+def _read_tool_calls(message: dict) -> tuple[ToolCall, ...]:
+    """Every tool the model asked for, not just the first.
+
+    A model may ask for several at once, which is the whole point of
+    allowing it: three lookups in one turn cost one prompt instead of
+    three. An entry we cannot read is dropped rather than raised on, so
+    one malformed call does not throw away the ones beside it.
+    """
+    raw = message.get("tool_calls") or []
+    calls: list[ToolCall] = []
+
+    for entry in raw:
+        function = (entry or {}).get("function") or {}
+        name = function.get("name")
+        if not name:
+            logger.warning("ignoring a tool call with no name: %s", entry)
+            continue
+        calls.append(
+            ToolCall(
+                id=str(entry.get("id") or ""),
+                name=str(name),
+                arguments=function.get("arguments") or "{}",
+            )
+        )
+
+    return tuple(calls)
+
+
+def _estimate_tokens(messages: list[dict], tools: list[dict] | None) -> int:
+    """Rough size of a request, for deciding whether to wait for the window.
+
+    Tool schemas are counted too. They are sent on every turn of a loop and
+    are easily a thousand tokens, so leaving them out would under-estimate
+    every request an agent makes.
+    """
+    characters = 0
+
+    for message in messages:
+        characters += len(message.get("content") or "")
+        for call in message.get("tool_calls") or []:
+            characters += len(((call or {}).get("function") or {}).get("arguments") or "")
+
+    if tools:
+        characters += len(json.dumps(tools))
+
+    return characters // CHARACTERS_PER_TOKEN
 
 
 async def _pause(seconds: float, why: str) -> None:
@@ -194,21 +312,21 @@ class LLMProvider:
             await self.client.aclose()
 
     def _payload(
-        self, system: str, user: str, *, json_mode: bool, temperature: float,
-        max_tokens: int | None,
+        self, messages: list[dict], *, json_mode: bool, temperature: float,
+        max_tokens: int | None, tools: list[dict] | None = None,
     ) -> dict:
         payload: dict = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": messages,
             "temperature": temperature,
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
         if max_tokens:
             payload["max_tokens"] = max_tokens
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
         return payload
 
     async def complete(
@@ -220,17 +338,43 @@ class LLMProvider:
         temperature: float = 0.0,
         max_tokens: int | None = None,
     ) -> Completion:
+        payload = self._payload(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            json_mode=json_mode, temperature=temperature, max_tokens=max_tokens,
+        )
+        return await self._send(payload, (len(system) + len(user)) // CHARACTERS_PER_TOKEN)
+
+    async def complete_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        *,
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> Completion:
+        """One turn of a tool-using conversation.
+
+        The whole history goes up every time, so the caller owns the message
+        list and appends to it between turns. JSON mode is deliberately not
+        offered: providers disagree about whether it can be combined with
+        tools, and the loop can read the final answer with Completion.as_json.
+        """
+        payload = self._payload(
+            messages, json_mode=False, temperature=temperature,
+            max_tokens=max_tokens, tools=tools,
+        )
+        return await self._send(payload, _estimate_tokens(messages, tools))
+
+    async def _send(self, payload: dict, estimated: int) -> Completion:
         if self.client is None:
             raise LLMError("use the provider inside 'async with'")
 
-        payload = self._payload(
-            system, user, json_mode=json_mode, temperature=temperature,
-            max_tokens=max_tokens,
-        )
         headers = {"Authorization": f"Bearer {self.api_key}"}
         url = f"{self.base_url}/chat/completions"
 
-        estimated = (len(system) + len(user)) // CHARACTERS_PER_TOKEN
         await _pause(
             rate_limit.wait_needed(estimated),
             f"only {rate_limit.remaining_tokens} tokens left this minute, "
@@ -284,9 +428,22 @@ class LLMProvider:
         body = response.json()
 
         try:
-            text = body["choices"][0]["message"]["content"]
+            choice = body["choices"][0]
+            message = choice["message"]
         except (KeyError, IndexError) as error:
             raise InvalidResponse(f"unexpected response shape: {error}")
+
+        # content is null whenever the model asks for a tool, so an empty
+        # string here is only an error if nothing was asked for either.
+        text = message.get("content") or ""
+        tool_calls = _read_tool_calls(message)
+        finish_reason = choice.get("finish_reason") or FINISH_STOP
+
+        if not text and not tool_calls:
+            raise InvalidResponse(
+                f"the model returned neither content nor a tool call "
+                f"(finish_reason {finish_reason!r})"
+            )
 
         usage = body.get("usage") or {}
         prompt_tokens = usage.get("prompt_tokens", 0)
@@ -294,11 +451,13 @@ class LLMProvider:
         quota.record(prompt_tokens, completion_tokens)
 
         return Completion(
-            text=text or "",
+            text=text,
             model=body.get("model", self.model),
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             attempts=attempt,
+            finish_reason=finish_reason,
+            tool_calls=tool_calls,
         )
 
     async def complete_json(

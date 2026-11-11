@@ -1,0 +1,123 @@
+{
+  "measured_at": "2026-11-11T07:17:20+00:00",
+  "pull_requests": 2,
+  "usable": 2,
+  "assumed_turns_per_agent": 3,
+  "turns_per_agent": {
+    "min": 1,
+    "median": 4.0,
+    "mean": 3.75,
+    "max": 6
+  },
+  "tool_calls_per_agent": {
+    "min": 0,
+    "median": 3.5,
+    "mean": 3.0,
+    "max": 5
+  },
+  "tokens_per_agent": {
+    "min": 2415,
+    "median": 16324.0,
+    "mean": 13841.75,
+    "max": 20304
+  },
+  "tokens_per_review": {
+    "min": 22719,
+    "median": 27683.5,
+    "mean": 27683.5,
+    "max": 32648
+  },
+  "seconds_per_review": {
+    "min": 131.7,
+    "median": 156.8,
+    "mean": 156.8,
+    "max": 181.9
+  },
+  "stopped_because": {
+    "no new information": 2,
+    "answered": 2
+  },
+  "tools_used": {
+    "read_file": 3,
+    "find_references": 2,
+    "grep": 1
+  },
+  "runs": [
+    {
+      "label": "retriever-renamed-keys",
+      "reviewable_files": 1,
+      "changed_lines": 7,
+      "context_items": 1,
+      "agents": [
+        {
+          "specialist": "wrong",
+          "turns": 6,
+          "tool_calls": 5,
+          "tools_used": [
+            "find_references",
+            "grep",
+            "read_file"
+          ],
+          "prompt_tokens": 18550,
+          "completion_tokens": 1754,
+          "stopped_because": "no new information",
+          "findings": 1
+        },
+        {
+          "specialist": "robust",
+          "turns": 1,
+          "tool_calls": 0,
+          "tools_used": [],
+          "prompt_tokens": 1962,
+          "completion_tokens": 453,
+          "stopped_because": "answered",
+          "findings": 0
+        }
+      ],
+      "seconds": 131.7292220829986,
+      "error": null
+    },
+    {
+      "label": "embedder-return-shape",
+      "reviewable_files": 2,
+      "changed_lines": 64,
+      "context_items": 1,
+      "agents": [
+        {
+          "specialist": "wrong",
+          "turns": 4,
+          "tool_calls": 4,
+          "tools_used": [
+            "find_references",
+            "read_file"
+          ],
+          "prompt_tokens": 13691,
+          "completion_tokens": 1102,
+          "stopped_because": "no new information",
+          "findings": 0
+        },
+        {
+          "specialist": "robust",
+          "turns": 4,
+          "tool_calls": 3,
+          "tools_used": [
+            "read_file"
+          ],
+          "prompt_tokens": 16340,
+          "completion_tokens": 1515,
+          "stopped_because": "answered",
+          "findings": 1
+        }
+      ],
+      "seconds": 181.93788541600225,
+      "error": null
+    }
+  ],
+  "quota": {
+    "requests": 15,
+    "prompt_tokens": 50543,
+    "completion_tokens": 4824,
+    "retries": 2,
+    "waited_seconds": 446.7
+  }
+}

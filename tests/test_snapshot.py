@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from src.context import snapshot as snap
+from src.context.languages import REVIEWABLE_SUFFIXES
 from src.context.snapshot import (
     SnapshotTooLarge,
     SnapshotUnavailable,
@@ -82,11 +83,24 @@ async def test_the_archive_prefix_is_stripped():
         assert all(not path.startswith(PREFIX) for path in s.files())
 
 
-async def test_only_python_files_are_kept():
+async def test_every_language_we_can_parse_is_kept():
+    """The snapshot must hold what the reviewer can read.
+
+    These two lists have to agree: a JavaScript file that survives the skip
+    rules but is missing from the snapshot looks exactly like a deleted
+    one, and its callers are never found.
+    """
     async with open_snapshot("o/r", "abc123", 42, client=fake_github(build_tarball())) as s:
-        assert all(path.endswith(".py") for path in s.files())
+        assert "frontend/src/App.jsx" in s.files()
+        assert any(path.endswith(".py") for path in s.files())
+
+
+async def test_files_we_cannot_parse_are_left_out():
+    async with open_snapshot("o/r", "abc123", 42, client=fake_github(build_tarball())) as s:
         assert "README.md" not in s.files()
-        assert "frontend/src/App.jsx" not in s.files()
+        assert all(
+            path.endswith(tuple(REVIEWABLE_SUFFIXES)) for path in s.files()
+        )
 
 
 async def test_vendored_and_generated_directories_are_skipped():

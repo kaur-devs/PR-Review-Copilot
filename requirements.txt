@@ -30,5 +30,11 @@ tree-sitter-python
 tree-sitter-javascript
 tree-sitter-typescript
 
+# Orchestrates the agentic review as a checkpointed state graph.
+# Pinned exactly: graphs are reported to break across minor releases, and
+# a review pipeline is not somewhere to discover that.
+langgraph==1.2.20
+langgraph-checkpoint-postgres==3.2.0
+
 # Tests
 pytest
