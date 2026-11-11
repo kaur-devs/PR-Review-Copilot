@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.context.languages import REVIEWABLE_SUFFIXES
 from src.diff.files import ChangedFile
 
 MAX_CHANGED_LINES_PER_FILE = 500
@@ -43,12 +44,13 @@ GENERATED_SUFFIXES = (
     ".lock",
 )
 
-# We only review languages we can actually parse. tree-sitter is loaded for
-# Python alone, so any other language would reach the model with no symbols
-# and no connected code: a worse review wearing the same label as a good one.
-# Adding a language means loading its grammar in src/context/symbols.py, not
-# just adding a suffix here.
-REVIEWABLE_SUFFIXES = frozenset({".py"})
+# Which languages we review is decided in one place, src/context/languages.py,
+# and read here. Registering a language there is what stops its files being
+# skipped: there is no second list to remember.
+#
+# A file we cannot parse would reach the model with no symbols and no
+# connected code, which is a worse review wearing the same label as a good
+# one. Skipping it and saying so is the honest option.
 
 
 @dataclass(frozen=True)
@@ -79,7 +81,7 @@ def decide(changed: ChangedFile) -> SkipDecision:
     # Checked after the rules above so a vendored JavaScript file is reported
     # as vendored, which is the more useful reason of the two.
     if Path(path).suffix not in REVIEWABLE_SUFFIXES:
-        return SkipDecision(True, "we only review Python")
+        return SkipDecision(True, "we cannot parse this language")
 
     if changed.changes > MAX_CHANGED_LINES_PER_FILE:
         return SkipDecision(

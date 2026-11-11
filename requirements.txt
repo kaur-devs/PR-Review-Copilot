@@ -27,6 +27,8 @@ unidiff
 # Parses source code so we can find which function changed
 tree-sitter
 tree-sitter-python
+tree-sitter-javascript
+tree-sitter-typescript
 
 # Tests
 pytest

@@ -1,7 +1,7 @@
 from src.filter.suggest import (
     MINIMUM_CONFIDENCE,
     apply_to_source,
-    is_valid_python,
+    is_valid_source,
     keeps_its_place,
     realign,
     files_to_read,
@@ -52,12 +52,12 @@ def test_replacing_a_line_that_is_not_there_gives_nothing():
 
 
 def test_a_sound_replacement_survives_parsing():
-    assert survives_parsing(SOURCE, 3, "    return total / max(len(values), 1)").allow
+    assert survives_parsing(SOURCE, 3, "    return total / max(len(values), 1)", "a.py").allow
 
 
 def test_a_replacement_the_model_forgot_to_indent_is_shifted_into_place():
     # The common model mistake: the right fix at column zero.
-    decision = survives_parsing(SOURCE, 3, "return total / max(len(values), 1)")
+    decision = survives_parsing(SOURCE, 3, "return total / max(len(values), 1)", "a.py")
 
     assert decision.allow
     assert decision.suggestion == "    return total / max(len(values), 1)"
@@ -66,20 +66,20 @@ def test_a_replacement_the_model_forgot_to_indent_is_shifted_into_place():
 def test_a_replacement_indented_with_the_wrong_character_is_refused():
     tabbed = "def average(values):\n\treturn sum(values) / len(values)\n"
 
-    decision = survives_parsing(tabbed, 2, "    return 0.0")
+    decision = survives_parsing(tabbed, 2, "    return 0.0", "a.py")
 
     assert not decision.allow
     assert "indented differently" in decision.reason
 
 
 def test_a_replacement_that_is_not_python_is_caught():
-    decision = survives_parsing(SOURCE, 3, "    return total / len(values")
+    decision = survives_parsing(SOURCE, 3, "    return total / len(values", "a.py")
 
     assert not decision.allow
 
 
 def test_a_file_that_already_does_not_parse_refuses_rather_than_guesses():
-    decision = survives_parsing("def broken(:\n    pass\n", 2, "    pass")
+    decision = survives_parsing("def broken(:\n    pass\n", 2, "    pass", "a.py")
 
     assert not decision.allow
     assert "does not parse as it is" in decision.reason
@@ -177,7 +177,7 @@ def test_a_replacement_that_compiles_but_escapes_its_block_is_caught():
     # Valid Python, and a silent behaviour change: send() now runs even when
     # dry_run is true. compile() alone has no objection to this.
     patched = apply_to_source(NESTED, 4, "    send(amount)")
-    assert is_valid_python(patched)
+    assert is_valid_source("app/stats.py", patched)
 
     decision = keeps_its_place(NESTED, 4, "    send(amount)")
 
@@ -214,11 +214,11 @@ def test_tabs_and_spaces_are_not_interchangeable():
 
 
 def test_what_cpython_rejects():
-    assert is_valid_python("x = 1\n")
-    assert not is_valid_python("def f(:\n    pass\n")
-    assert not is_valid_python("def f():\n    pass\nreturn 1\n")
-    assert not is_valid_python("def f():\n    x = 1\n      y = 2\n")
-    assert not is_valid_python("x = 'unclosed\n")
+    assert is_valid_source("app/stats.py", "x = 1\n")
+    assert not is_valid_source("app/stats.py", "def f(:\n    pass\n")
+    assert not is_valid_source("app/stats.py", "def f():\n    pass\nreturn 1\n")
+    assert not is_valid_source("app/stats.py", "def f():\n    x = 1\n      y = 2\n")
+    assert not is_valid_source("app/stats.py", "x = 'unclosed\n")
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +241,7 @@ RETURNS_A_DICT = '''def retrieve_context(db, repo_id, question):
 def test_the_case_from_the_first_live_run():
     # Line 6 is '        "primary_chunks": similar_chunks,' - eight spaces.
     decision = survives_parsing(
-        RETURNS_A_DICT, 6, '"chunks": similar_chunks,'
+        RETURNS_A_DICT, 6, '"chunks": similar_chunks,', "a.py"
     )
 
     assert decision.allow
@@ -287,7 +287,7 @@ def test_shifting_preserves_relative_shape_and_leaves_the_rest_to_compile():
     shifted = realign(SOURCE, 3, "        if values:\n     pass")
 
     assert shifted == "    if values:\n pass"
-    assert not is_valid_python(apply_to_source(SOURCE, 3, shifted))
+    assert not is_valid_source("app/stats.py", apply_to_source(SOURCE, 3, shifted))
 
 
 def test_tabs_and_spaces_cannot_be_shifted_into_each_other():

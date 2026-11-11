@@ -3,22 +3,14 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-import tree_sitter_python
-from tree_sitter import Language, Node, Parser, Tree
+from tree_sitter import Node, Tree
 
+from src.context.languages import PYTHON, LanguageSupport, support_for
 from src.context.snapshot import Snapshot
 from src.diff.parse import FileDiff
 
 logger = logging.getLogger(__name__)
 
-PYTHON = Language(tree_sitter_python.language())
-PARSER = Parser(PYTHON)
-
-FUNCTION = "function_definition"
-CLASS = "class_definition"
-DEFINITION_TYPES = frozenset({FUNCTION, CLASS})
-
-KIND_BY_TYPE = {FUNCTION: "function", CLASS: "class"}
 MODULE_KIND = "module"
 MODULE_NAME = "<module>"
 
@@ -47,8 +39,13 @@ class Symbol:
         return f"{self.file}:{self.start_line} {self.kind} {self.qualified_name}"
 
 
-def parse_source(source: bytes) -> Tree:
-    return PARSER.parse(source)
+def parse_source(source: bytes, support: LanguageSupport = PYTHON) -> Tree:
+    """Parse with a language's own grammar.
+
+    Python is the default so the many call sites that already know they hold
+    Python read unchanged. Anywhere the language is in doubt, pass it.
+    """
+    return support.parse(source)
 
 
 def _walk(node: Node):
@@ -81,19 +78,41 @@ def _definition_name(node: Node) -> str:
     return name_node.text.decode("utf-8", "replace") if name_node else "<anonymous>"
 
 
-def _enclosing_definitions(node: Node) -> list[Node]:
+def _enclosing_definitions(
+    node: Node, support: LanguageSupport
+) -> list[Node]:
     chain: list[Node] = []
     current: Node | None = node
     while current is not None:
-        if current.type in DEFINITION_TYPES:
+        if support.is_definition(current):
             chain.append(current)
         current = current.parent
     return chain
 
 
+def _definition_starting_on_row(
+    node: Node, row: int, support: LanguageSupport
+) -> Node | None:
+    """The innermost definition that begins on this row, searching downwards.
+
+    Needed because a definition is not always below the point we start from.
+    "export function f()" wraps the declaration in an export statement, so
+    the start of the line lands on the wrapper and walking up finds nothing.
+    The declaration is a child, not a parent.
+    """
+    found: Node | None = None
+    for candidate in _walk(node):
+        if candidate.start_point[0] != row:
+            continue
+        if support.is_definition(candidate):
+            found = candidate
+    return found
+
+
 def symbol_at_line(
     tree: Tree, source_lines: list[str], file: str, line_number: int
 ) -> Symbol | None:
+    support = support_for(file) or PYTHON
     row = line_number - 1
     if row < 0 or row >= len(source_lines):
         return None
@@ -103,7 +122,12 @@ def symbol_at_line(
     if node is None:
         return None
 
-    chain = _enclosing_definitions(node)
+    chain = _enclosing_definitions(node, support)
+
+    if not chain:
+        inner = _definition_starting_on_row(node, row, support)
+        if inner is not None:
+            chain = _enclosing_definitions(inner, support)
 
     if not chain:
         return Symbol(
@@ -121,7 +145,7 @@ def symbol_at_line(
     return Symbol(
         name=names[-1],
         qualified_name=".".join(names),
-        kind=KIND_BY_TYPE[innermost.type],
+        kind=support.kind_of(innermost),
         file=file,
         start_line=innermost.start_point[0] + 1,
         end_line=innermost.end_point[0] + 1,
@@ -131,8 +155,12 @@ def symbol_at_line(
 def symbols_in_file(
     snapshot: Snapshot, file: str, line_numbers: list[int]
 ) -> tuple[list[Symbol], ParseHealth]:
+    support = support_for(file)
+    if support is None:
+        return [], ParseHealth(ok=False)
+
     source = snapshot.read(file)
-    tree = parse_source(source)
+    tree = parse_source(source, support)
     health = check_parse_health(tree)
 
     if not health.ok:
