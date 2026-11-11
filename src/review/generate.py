@@ -23,7 +23,7 @@ MAX_SUGGESTION_LENGTH = 400
 SKIP_KINDS = frozenset({"docs"})
 
 
-def _read_suggestion(value: object) -> str | None:
+def read_suggestion(value: object) -> str | None:
     """The replacement text, or None when there is nothing usable.
 
     Deliberately not stripped the way a message is. Leading whitespace is the
@@ -48,16 +48,90 @@ def _coerce_confidence(value: object) -> float | None:
     return min(1.0, max(0.0, number))
 
 
-def _read_finding(
-    entry: object, diffs_by_file: dict[str, FileDiff], context: ContextBundle
+def _first_commentable_line(diff: FileDiff) -> int | None:
+    for line in diff.added_line_numbers:
+        if diff.can_comment_on(line):
+            return line
+    return None
+
+
+def reanchor(
+    entry: dict, diffs_by_file: dict[str, FileDiff]
+) -> tuple[str, int, str] | None:
+    """Move a finding about an untouched file onto the change that caused it.
+
+    The agentic reviewer can see further than GitHub lets us point. On
+    the first real run an agent reported that `chat.py:86` reads keys
+    `retrieve_context` no longer returns — a genuine cross-file break, in
+    a file the pull request never touched — and it was thrown away,
+    because a comment can only be anchored to a changed line.
+
+    Dropping it is the wrong answer: that finding is the whole reason for
+    running agents. Instead it is anchored on the changed line that
+    caused the problem, and the place it breaks is named in the message,
+    which is also where a reader wants the comment to appear.
+
+    Returns the new (file, line, note), or None if nothing in the diff
+    can be tied to it.
+    """
+    named = [
+        value
+        for key in ("affects", "evidence_files")
+        for value in (entry.get(key) or [])
+        if isinstance(value, str)
+    ]
+
+    for candidate in [*named, *diffs_by_file]:
+        path = candidate.split(":", 1)[0]
+        diff = diffs_by_file.get(path)
+        if diff is None:
+            continue
+        line = _first_commentable_line(diff)
+        if line is None:
+            continue
+        return path, line, "the cause of a problem in another file"
+
+    return None
+
+
+def read_finding(
+    entry: object,
+    diffs_by_file: dict[str, FileDiff],
+    evidence: tuple[str, ...] = (),
+    *,
+    allow_reanchor: bool = False,
 ) -> tuple[Finding | None, str]:
+    """Turn one entry from a model into a Finding, or say why not.
+
+    Shared with the specialist agents, which produce the same shape from a
+    different prompt. Evidence is passed in rather than derived: the
+    context builder knows which files it supplied, and an agent knows
+    which files it actually opened.
+
+    `allow_reanchor` is for findings from an agent, which can reach files
+    the diff does not contain. The single-pass generator only ever sees
+    the diff, so a path outside it there is a mistake, not a discovery.
+    """
     if not isinstance(entry, dict):
         return None, "not an object"
 
     path = entry.get("file")
     diff = diffs_by_file.get(path)
+    affects = ""
+
     if diff is None:
-        return None, "that file is not in this change"
+        if not allow_reanchor:
+            return None, "that file is not in this change"
+
+        moved = reanchor(entry, diffs_by_file)
+        if moved is None:
+            return None, "that file is not in this change, and nothing in it fits"
+
+        affects = f"{path}:{entry.get('line')}" if path else ""
+        path, reanchored_line, _ = moved
+        diff = diffs_by_file[path]
+        entry = {**entry, "file": path, "line": reanchored_line}
+        logger.info("moved a finding about %s onto %s:%s", affects, path, reanchored_line)
 
     try:
         line = int(entry.get("line"))
@@ -79,13 +153,14 @@ def _read_finding(
     if not message:
         return None, "empty message"
 
+    # Say where it actually breaks. The comment sits on the cause, so
+    # without this the reader is told something is wrong and not where.
+    if affects:
+        message = f"{message} (breaks {affects})"
+
     confidence = _coerce_confidence(entry.get("confidence"))
     if confidence is None:
         return None, f"confidence {entry.get('confidence')!r} is not a number"
-
-    evidence = tuple(
-        item.file for item in context.items if item.file != path
-    )
 
     return Finding(
         file=path,
@@ -96,7 +171,7 @@ def _read_finding(
         rationale=str(entry.get("rationale", "")).strip()[:MAX_RATIONALE_LENGTH],
         confidence=confidence,
         evidence_files=evidence,
-        suggestion=_read_suggestion(entry.get("suggestion")),
+        suggestion=read_suggestion(entry.get("suggestion")),
     ), ""
 
 
@@ -137,9 +212,14 @@ async def _generate_for_kind(
         logger.warning("the model did not return a findings list for %s", kind)
         return []
 
+    evidence = tuple(item.file for item in context.items)
+
     findings = []
     for entry in raw[:MAX_FINDINGS_PER_REQUEST]:
-        finding, reason = _read_finding(entry, diffs_by_file, context)
+        finding, reason = read_finding(
+            entry, diffs_by_file, tuple(f for f in evidence if f != entry.get("file"))
+            if isinstance(entry, dict) else evidence,
+        )
         if finding is not None:
             findings.append(finding)
         else:

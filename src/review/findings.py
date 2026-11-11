@@ -12,6 +12,11 @@ SEVERITY_ORDER = {SEVERITY_HIGH: 0, SEVERITY_MEDIUM: 1, SEVERITY_LOW: 2}
 CATEGORIES = (
     "correctness",
     "error_handling",
+    # Added when the robustness agent kept reporting real problems under
+    # this name and having them thrown away. Its prompt asks for missing
+    # awaits, blocking calls on async paths and unguarded shared state;
+    # calling those "error_handling" was always a stretch.
+    "concurrency",
     "security",
     "breaking_change",
     "performance",

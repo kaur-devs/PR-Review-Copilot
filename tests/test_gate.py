@@ -1,4 +1,11 @@
-from src.filter.gate import MINIMUM_CONFIDENCE, apply_gate
+from dataclasses import replace
+
+from src.filter.gate import (
+    MINIMUM_CONFIDENCE,
+    apply_gate,
+    confidence_gate,
+    severity_gate,
+)
 from src.review.findings import Finding
 
 
@@ -78,3 +85,58 @@ def test_an_empty_list_is_fine():
 
     assert result.post == []
     assert result.hold == []
+
+
+# ------------------------------------------- the two halves, run separately
+
+def test_severity_is_decided_without_looking_at_confidence():
+    """This half runs before verification, where confidence is not final."""
+    result = severity_gate([make("low", 0.99), make("high", 0.01)])
+
+    assert [f.severity for f in result.post] == ["high"]
+    assert result.hold[0][1] == "low severity is not posted"
+
+
+def test_confidence_is_decided_without_looking_at_severity():
+    result = confidence_gate([make("low", 0.99), make("high", 0.01)])
+
+    assert [f.severity for f in result.post] == ["low"]
+    assert "confidence" in result.hold[0][1]
+
+
+def test_nothing_low_severity_survives_to_be_verified():
+    """The point of the split: verification is the expensive stage, and
+    paying it for a finding the gate will drop anyway is pure waste."""
+    candidates = [
+        make("high", 0.5, line=1),
+        make("low", 0.95, line=2),
+        make("medium", 0.4, line=3),
+    ]
+
+    worth_verifying = severity_gate(candidates).post
+
+    assert [f.line for f in worth_verifying] == [1, 3]
+
+
+def test_the_halves_together_agree_with_the_single_pass_gate():
+    candidates = [
+        make("high", 0.95, line=1),
+        make("medium", 0.80, line=2),
+        make("low", 0.99, line=3),
+        make("high", 0.20, line=4),
+    ]
+
+    in_one_pass = apply_gate(candidates).post
+    in_two = confidence_gate(severity_gate(candidates).post).post
+
+    assert [f.line for f in in_one_pass] == [f.line for f in in_two]
+
+
+def test_a_finding_the_judge_knocked_down_is_held_by_the_second_half():
+    """0.8 clears the floor; the unverifiable penalty takes it to 0.56,
+    which does not. This is why confidence is checked after the judge."""
+    before = make("high", 0.8)
+    after = replace(before, confidence=round(0.8 * 0.7, 2))
+
+    assert severity_gate([before]).post == [before]
+    assert confidence_gate([after]).post == []
