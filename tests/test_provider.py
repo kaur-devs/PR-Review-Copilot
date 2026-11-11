@@ -340,3 +340,232 @@ async def test_time_spent_waiting_is_counted():
             await model.complete("s", "u")
 
     assert quota.waited_seconds > 0
+
+
+# ---------------------------------------------------------------- tool calls
+
+READ_FILE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "read_file",
+        "description": "Read lines from a file",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    },
+}
+
+
+def tool_call_body(*calls, content=None):
+    """A reply in which the model asks for tools instead of answering."""
+    return {
+        "model": "openai/gpt-oss-120b",
+        "choices": [
+            {
+                "finish_reason": "tool_calls" if calls else "stop",
+                "message": {
+                    "content": content,
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": name, "arguments": arguments},
+                        }
+                        for call_id, name, arguments in calls
+                    ],
+                },
+            }
+        ],
+    }
+
+
+async def test_a_tool_call_is_read_back():
+    client, _ = fake_model(
+        body=tool_call_body(("call_1", "read_file", '{"path": "api.js"}'))
+    )
+
+    async with make(client) as model:
+        answer = await model.complete_with_tools(
+            [{"role": "user", "content": "look at this"}], [READ_FILE_TOOL]
+        )
+
+    assert answer.wants_tools
+    assert answer.finish_reason == "tool_calls"
+    assert len(answer.tool_calls) == 1
+    assert answer.tool_calls[0].name == "read_file"
+    assert answer.tool_calls[0].parsed() == {"path": "api.js"}
+
+
+async def test_several_tools_in_one_turn_are_all_returned():
+    """Parallel calls are the point: three lookups for one prompt, not three."""
+    client, _ = fake_model(
+        body=tool_call_body(
+            ("call_1", "read_file", '{"path": "a.js"}'),
+            ("call_2", "grep", '{"pattern": "streamChat"}'),
+            ("call_3", "find_references", '{"symbol": "streamChat"}'),
+        )
+    )
+
+    async with make(client) as model:
+        answer = await model.complete_with_tools([], [READ_FILE_TOOL])
+
+    assert [call.name for call in answer.tool_calls] == [
+        "read_file", "grep", "find_references",
+    ]
+
+
+async def test_an_empty_content_with_a_tool_call_is_not_an_error():
+    """content is null whenever a tool is asked for. Reading it as "" and
+    carrying on would silently turn a tool call into "the model said
+    nothing"."""
+    client, _ = fake_model(
+        body=tool_call_body(("call_1", "read_file", "{}"), content=None)
+    )
+
+    async with make(client) as model:
+        answer = await model.complete_with_tools([], [READ_FILE_TOOL])
+
+    assert answer.text == ""
+    assert answer.wants_tools
+
+
+async def test_neither_content_nor_a_tool_call_is_an_error():
+    client, _ = fake_model(
+        body={"choices": [{"finish_reason": "stop", "message": {"content": None}}]}
+    )
+
+    async with make(client) as model:
+        with pytest.raises(InvalidResponse, match="neither content nor a tool call"):
+            await model.complete_with_tools([], [READ_FILE_TOOL])
+
+
+async def test_a_final_answer_carries_no_tool_calls():
+    client, _ = fake_model(content='{"findings": []}')
+
+    async with make(client) as model:
+        answer = await model.complete_with_tools([], [READ_FILE_TOOL])
+
+    assert not answer.wants_tools
+    assert answer.as_json() == {"findings": []}
+
+
+async def test_arguments_that_are_not_json_are_rejected_readably():
+    """The model does get this wrong. The loop must be able to tell it so
+    rather than crashing."""
+    client, _ = fake_model(
+        body=tool_call_body(("call_1", "read_file", "{path: api.js"))
+    )
+
+    async with make(client) as model:
+        answer = await model.complete_with_tools([], [READ_FILE_TOOL])
+
+    with pytest.raises(InvalidResponse, match="read_file was called with arguments"):
+        answer.tool_calls[0].parsed()
+
+
+async def test_a_tool_call_with_no_name_is_dropped_not_fatal():
+    client, _ = fake_model(
+        body={
+            "model": "m",
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "bad", "type": "function", "function": {}},
+                        {"id": "ok", "type": "function",
+                         "function": {"name": "grep", "arguments": "{}"}},
+                    ],
+                },
+            }],
+        }
+    )
+
+    async with make(client) as model:
+        answer = await model.complete_with_tools([], [READ_FILE_TOOL])
+
+    assert [call.name for call in answer.tool_calls] == ["grep"]
+
+
+async def test_the_tools_are_sent_in_the_request():
+    client, calls = fake_model(content="done")
+
+    async with make(client) as model:
+        await model.complete_with_tools(
+            [{"role": "user", "content": "hi"}], [READ_FILE_TOOL]
+        )
+
+    sent = json.loads(calls[0].content)
+    assert sent["tools"] == [READ_FILE_TOOL]
+    assert sent["tool_choice"] == "auto"
+    assert "response_format" not in sent
+
+
+async def test_the_whole_conversation_is_sent_every_turn():
+    client, calls = fake_model(content="done")
+    history = [
+        {"role": "system", "content": "you review code"},
+        {"role": "user", "content": "this diff"},
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": "c1", "type": "function",
+                         "function": {"name": "grep", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "no matches"},
+    ]
+
+    async with make(client) as model:
+        await model.complete_with_tools(history, [READ_FILE_TOOL])
+
+    assert json.loads(calls[0].content)["messages"] == history
+
+
+async def test_an_assistant_turn_can_be_appended_to_the_conversation():
+    """A tool result is refused unless the assistant message that asked for
+    it is already in the history, so Completion builds that message."""
+    client, _ = fake_model(
+        body=tool_call_body(("call_1", "read_file", '{"path": "a.js"}'))
+    )
+
+    async with make(client) as model:
+        answer = await model.complete_with_tools([], [READ_FILE_TOOL])
+
+    assert answer.as_message() == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "read_file", "arguments": '{"path": "a.js"}'},
+        }],
+    }
+
+
+async def test_a_tool_result_is_addressed_to_the_call_that_asked():
+    from src.review.provider import ToolCall, tool_result_message
+
+    call = ToolCall(id="call_7", name="grep", arguments="{}")
+
+    assert tool_result_message(call, "3 matches") == {
+        "role": "tool",
+        "tool_call_id": "call_7",
+        "content": "3 matches",
+    }
+
+
+async def test_plain_completion_still_works_unchanged():
+    """classify, generate and judge all go through complete(). The tool
+    support must not have moved anything under them."""
+    client, calls = fake_model(content='{"ok": true}')
+
+    async with make(client) as model:
+        answer = await model.complete_json("be brief", "a question")
+
+    sent = json.loads(calls[0].content)
+    assert answer == {"ok": True}
+    assert sent["response_format"] == {"type": "json_object"}
+    assert "tools" not in sent
+    assert sent["messages"] == [
+        {"role": "system", "content": "be brief"},
+        {"role": "user", "content": "a question"},
+    ]

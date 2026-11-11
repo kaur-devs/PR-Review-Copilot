@@ -152,6 +152,41 @@ def symbol_at_line(
     )
 
 
+def definitions_named(snapshot: Snapshot, file: str, name: str) -> list[Symbol]:
+    """Every definition of this name in one file.
+
+    A list rather than one result because a name is not unique: the same
+    method name appears on several classes, and picking one silently would
+    send the reader to the wrong place.
+    """
+    support = support_for(file)
+    if support is None:
+        return []
+
+    source = snapshot.read(file)
+    tree = parse_source(source, support)
+    line_count = len(source.decode("utf-8", "replace").splitlines())
+
+    found: list[Symbol] = []
+    for node in _walk(tree.root_node):
+        if not support.is_definition(node) or _definition_name(node) != name:
+            continue
+        chain = _enclosing_definitions(node, support)
+        names = [_definition_name(definition) for definition in reversed(chain)]
+        found.append(
+            Symbol(
+                name=name,
+                qualified_name=".".join(names) or name,
+                kind=support.kind_of(node),
+                file=file,
+                start_line=node.start_point[0] + 1,
+                end_line=min(node.end_point[0] + 1, line_count),
+            )
+        )
+
+    return found
+
+
 def symbols_in_file(
     snapshot: Snapshot, file: str, line_numbers: list[int]
 ) -> tuple[list[Symbol], ParseHealth]:
