@@ -7,7 +7,7 @@ from src.context.references import (
     LEXICAL_MATCH,
     find_candidates,
     find_references,
-    module_names_for,
+    import_targets_for,
     verify_references,
 )
 from src.context.snapshot import Snapshot
@@ -140,9 +140,10 @@ def test_a_file_that_does_not_parse_falls_back_to_lexical(tmp_path):
 
 
 def test_module_names_cover_every_import_style():
-    assert module_names_for("app/models.py") == {"models", "app.models"}
-    assert module_names_for("models.py") == {"models"}
-    assert module_names_for("a/b/c.py") == {"c", "b.c", "a.b.c"}
+    # Python ignores the importing file: a module's name is its own path.
+    assert import_targets_for("x.py", "app/models.py") == {"models", "app.models"}
+    assert import_targets_for("x.py", "models.py") == {"models"}
+    assert import_targets_for("x.py", "a/b/c.py") == {"c", "b.c", "a.b.c"}
 
 
 def test_candidates_are_found_by_plain_text(tmp_path):
@@ -152,7 +153,9 @@ def test_candidates_are_found_by_plain_text(tmp_path):
         "app/other.py": "something_else()\n",
     })
 
-    found = find_candidates(snapshot, "get_user", exclude={"app/models.py"})
+    found = find_candidates(
+        snapshot, "get_user", exclude={"app/models.py"}, defined_in="app/models.py"
+    )
 
     assert found == ["app/service.py"]
 
@@ -163,7 +166,12 @@ def test_candidates_exclude_the_changed_files(tmp_path):
         "app/service.py": "get_user(1)\n",
     })
 
-    found = find_candidates(snapshot, "get_user", exclude={"app/models.py", "app/service.py"})
+    found = find_candidates(
+        snapshot,
+        "get_user",
+        exclude={"app/models.py", "app/service.py"},
+        defined_in="app/models.py",
+    )
 
     assert found == []
 
@@ -175,7 +183,7 @@ def test_the_candidate_list_is_capped(tmp_path, monkeypatch):
     files = {f"app/f{n}.py": "get_user(1)\n" for n in range(10)}
     snapshot = build(tmp_path, files)
 
-    assert len(find_candidates(snapshot, "get_user", exclude=set())) == 3
+    assert len(find_candidates(snapshot, "get_user", exclude=set(), defined_in="app/models.py")) == 3
 
 
 def test_the_whole_search_keeps_real_uses_and_drops_the_rest(tmp_path):

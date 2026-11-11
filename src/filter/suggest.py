@@ -29,6 +29,7 @@ import os
 from dataclasses import dataclass, field, replace
 from typing import Collection, Mapping
 
+from src.context.languages import support_for
 from src.review.findings import SEVERITY_HIGH, SEVERITY_MEDIUM, Finding
 
 logger = logging.getLogger(__name__)
@@ -89,20 +90,17 @@ def apply_to_source(source: str, line: int, suggestion: str) -> str | None:
     return "\n".join(lines[: line - 1] + suggestion.splitlines() + lines[line:])
 
 
-def is_valid_python(source: str) -> bool:
-    """Whether CPython would accept this as a module.
+def is_valid_source(path: str, source: str) -> bool:
+    """Whether this file's language would accept the text as whole.
 
-    compile() parses and does not run anything. IndentationError and TabError
-    are both SyntaxError, so one except covers all three.
+    How strict this is depends on the language, and the difference is worth
+    knowing. Python gets CPython's own parser, which rejects a line
+    de-indented out of its function. Languages without one fall back to
+    tree-sitter, which is deliberately tolerant and will accept things their
+    compiler would not.
     """
-    try:
-        compile(source, "<suggestion>", "exec")
-    except SyntaxError:
-        return False
-    except ValueError:
-        # A null byte, or source too deeply nested. Not valid either.
-        return False
-    return True
+    support = support_for(path)
+    return support is not None and support.is_valid_source(source)
 
 
 def _indentation(line: str) -> str:
@@ -177,8 +175,10 @@ def keeps_its_place(source: str, line: int, suggestion: str) -> SuggestionDecisi
     return SuggestionDecision(True)
 
 
-def survives_parsing(source: str, line: int, suggestion: str) -> SuggestionDecision:
-    if not is_valid_python(source):
+def survives_parsing(
+    source: str, line: int, suggestion: str, path: str
+) -> SuggestionDecision:
+    if not is_valid_source(path, source):
         # Without a clean starting point there is nothing to compare against,
         # so we cannot blame the suggestion either way. Refuse rather than
         # guess: an unverified suggestion should not get an Apply button.
@@ -199,7 +199,7 @@ def survives_parsing(source: str, line: int, suggestion: str) -> SuggestionDecis
     if patched is None:
         return SuggestionDecision(False, f"line {line} is not in the file")
 
-    if not is_valid_python(patched):
+    if not is_valid_source(path, patched):
         return SuggestionDecision(False, "applying it would stop the file parsing")
 
     placed = keeps_its_place(source, line, shifted)
@@ -274,7 +274,7 @@ def settle(
                 )
             else:
                 decision = survives_parsing(
-                    source, finding.line, finding.suggestion or ""
+                    source, finding.line, finding.suggestion or "", finding.file
                 )
 
         if decision.allow:

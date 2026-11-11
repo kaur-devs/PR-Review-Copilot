@@ -20,12 +20,23 @@ def test_ordinary_python_files_are_reviewed():
     assert decide(make("app/services/billing.py")).skip is False
 
 
-def test_other_languages_are_skipped():
-    for path in ["app/components/Button.tsx", "frontend/App.jsx", "styles/main.css"]:
+def test_languages_we_cannot_parse_are_skipped():
+    for path in ["styles/main.css", "data/fixtures.json", "docs/notes.rst"]:
         decision = decide(make(path))
 
         assert decision.skip
-        assert "Python" in decision.reason
+        assert "cannot parse" in decision.reason
+
+
+def test_every_registered_language_is_reviewed():
+    for path in [
+        "app/service.py",
+        "src/components/Button.tsx",
+        "frontend/App.jsx",
+        "src/services/retriever.ts",
+        "scripts/build.mjs",
+    ]:
+        assert decide(make(path)).skip is False, path
 
 
 def test_files_with_no_extension_are_skipped():

@@ -4,10 +4,11 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from tree_sitter import Node, Query, QueryCursor, Tree
+from tree_sitter import Node, QueryCursor, Tree
 
+from src.context.languages import LanguageSupport, same_language, support_for
 from src.context.snapshot import Snapshot
-from src.context.symbols import PYTHON, Symbol, check_parse_health, parse_source
+from src.context.symbols import Symbol, check_parse_health, parse_source
 
 logger = logging.getLogger(__name__)
 
@@ -27,39 +28,16 @@ CONFIDENCE = {
 
 MAX_CANDIDATES_PER_SYMBOL = 40
 
-CALLS = Query(PYTHON, "(call function: (identifier) @name) @call")
-
-ATTRIBUTE_CALLS = Query(
-    PYTHON,
-    "(call function: (attribute object: (identifier) @object"
-    "                          attribute: (identifier) @name)) @call",
-)
-
-IDENTIFIERS = Query(PYTHON, "(identifier) @name")
-
-IMPORTS = Query(
-    PYTHON,
-    """
-    (import_from_statement
-      module_name: (_) @module
-      name: (dotted_name) @imported)
-
-    (import_from_statement
-      module_name: (_) @module
-      name: (aliased_import
-              name: (dotted_name) @imported
-              alias: (identifier) @alias))
-
-    (import_statement name: (dotted_name) @module_only)
-    """,
-)
-
 
 @dataclass(frozen=True)
 class ImportFacts:
     symbol_imported: bool = False
     module_imported: bool = False
     local_name: str | None = None
+
+    # What the whole module was called locally, for "import * as x" and
+    # "import a.b as x". Without it, x.thing() cannot be tied to the import.
+    module_alias: str | None = None
 
 
 @dataclass(frozen=True)
@@ -83,9 +61,12 @@ class Reference:
         )
 
 
-def module_names_for(path: str) -> set[str]:
-    parts = Path(path).with_suffix("").parts
-    return {".".join(parts[index:]) for index in range(len(parts))}
+def import_targets_for(importing_file: str, defining_file: str) -> set[str]:
+    """Every string an import in one file could use to name another."""
+    support = support_for(defining_file)
+    if support is None:
+        return set()
+    return support.import_targets(importing_file, defining_file)
 
 
 def _text(node: Node) -> str:
@@ -93,13 +74,15 @@ def _text(node: Node) -> str:
 
 
 def find_candidates(
-    snapshot: Snapshot, name: str, exclude: set[str]
+    snapshot: Snapshot, name: str, exclude: set[str], defined_in: str
 ) -> list[str]:
     needle = name.encode()
     found = [
         path
         for path in snapshot.files()
-        if path not in exclude and needle in snapshot.read(path)
+        if path not in exclude
+        and same_language(path, defined_in)
+        and needle in snapshot.read(path)
     ]
 
     if len(found) > MAX_CANDIDATES_PER_SYMBOL:
@@ -114,21 +97,28 @@ def find_candidates(
     return found
 
 
-def analyse_imports(tree: Tree, defining_modules: set[str], symbol_name: str) -> ImportFacts:
+def analyse_imports(
+    tree: Tree, defining_modules: set[str], symbol_name: str,
+    support: LanguageSupport,
+) -> ImportFacts:
     symbol_imported = False
     module_imported = False
     local_name: str | None = None
+    module_alias: str | None = None
 
-    for _, captures in QueryCursor(IMPORTS).matches(tree.root_node):
+    for _, captures in QueryCursor(support.imports).matches(tree.root_node):
         if "module_only" in captures:
-            if _text(captures["module_only"][0]) in defining_modules:
+            module = support.normalise_import(_text(captures["module_only"][0]))
+            if module in defining_modules:
                 module_imported = True
+                if "module_alias" in captures:
+                    module_alias = _text(captures["module_alias"][0])
             continue
 
         if _text(captures["imported"][0]) != symbol_name:
             continue
 
-        module = _text(captures["module"][0]).lstrip(".")
+        module = support.normalise_import(_text(captures["module"][0]))
         if module not in defining_modules:
             continue
 
@@ -137,21 +127,25 @@ def analyse_imports(tree: Tree, defining_modules: set[str], symbol_name: str) ->
             _text(captures["alias"][0]) if "alias" in captures else symbol_name
         )
 
-    return ImportFacts(symbol_imported, module_imported, local_name)
+    return ImportFacts(symbol_imported, module_imported, local_name, module_alias)
 
 
-def _call_sites(tree: Tree, wanted_name: str) -> list[tuple[int, int]]:
+def _call_sites(
+    tree: Tree, wanted_name: str, support: LanguageSupport
+) -> list[tuple[int, int]]:
     sites = []
-    for _, captures in QueryCursor(CALLS).matches(tree.root_node):
+    for _, captures in QueryCursor(support.calls).matches(tree.root_node):
         name_node = captures["name"][0]
         if _text(name_node) == wanted_name:
             sites.append((name_node.start_byte, name_node.start_point[0] + 1))
     return sites
 
 
-def _attribute_call_sites(tree: Tree, wanted_name: str) -> list[tuple[str, int]]:
+def _attribute_call_sites(
+    tree: Tree, wanted_name: str, support: LanguageSupport
+) -> list[tuple[str, int]]:
     sites = []
-    for _, captures in QueryCursor(ATTRIBUTE_CALLS).matches(tree.root_node):
+    for _, captures in QueryCursor(support.attribute_calls).matches(tree.root_node):
         if _text(captures["name"][0]) == wanted_name:
             sites.append(
                 (_text(captures["object"][0]), captures["call"][0].start_point[0] + 1)
@@ -160,18 +154,15 @@ def _attribute_call_sites(tree: Tree, wanted_name: str) -> list[tuple[str, int]]
 
 
 def _bare_identifier_sites(
-    tree: Tree, wanted_name: str, already_counted: set[int]
+    tree: Tree, wanted_name: str, already_counted: set[int],
+    support: LanguageSupport,
 ) -> list[int]:
     lines = []
-    for _, captures in QueryCursor(IDENTIFIERS).matches(tree.root_node):
+    for _, captures in QueryCursor(support.identifiers).matches(tree.root_node):
         node = captures["name"][0]
         if _text(node) != wanted_name or node.start_byte in already_counted:
             continue
-        if node.parent is not None and node.parent.type in (
-            "import_from_statement",
-            "dotted_name",
-            "aliased_import",
-        ):
+        if node.parent is not None and node.parent.type in support.import_node_types:
             continue
         lines.append(node.start_point[0] + 1)
     return lines
@@ -180,7 +171,11 @@ def _bare_identifier_sites(
 def verify_references(
     snapshot: Snapshot, path: str, symbol: Symbol
 ) -> list[Reference]:
-    tree = parse_source(snapshot.read(path))
+    support = support_for(path)
+    if support is None:
+        return []
+
+    tree = parse_source(snapshot.read(path), support)
 
     if not check_parse_health(tree).ok:
         logger.info("%s did not parse, treating the match as lexical only", path)
@@ -191,14 +186,14 @@ def verify_references(
             )
         ]
 
-    defining_modules = module_names_for(symbol.file)
-    imports = analyse_imports(tree, defining_modules, symbol.name)
+    defining_modules = import_targets_for(path, symbol.file)
+    imports = analyse_imports(tree, defining_modules, symbol.name, support)
     local_name = imports.local_name or symbol.name
 
     references: list[Reference] = []
     counted_bytes: set[int] = set()
 
-    for start_byte, line in _call_sites(tree, local_name):
+    for start_byte, line in _call_sites(tree, local_name, support):
         counted_bytes.add(start_byte)
         references.append(
             Reference(
@@ -209,8 +204,10 @@ def verify_references(
             )
         )
 
-    for object_name, line in _attribute_call_sites(tree, symbol.name):
-        through_module = imports.module_imported and object_name in defining_modules
+    for object_name, line in _attribute_call_sites(tree, symbol.name, support):
+        through_module = imports.module_imported and (
+            object_name in defining_modules or object_name == imports.module_alias
+        )
         references.append(
             Reference(
                 path, line, symbol, f"{object_name}.{symbol.name}",
@@ -222,7 +219,9 @@ def verify_references(
         )
 
     if imports.symbol_imported:
-        for line in _bare_identifier_sites(tree, local_name, counted_bytes):
+        for line in _bare_identifier_sites(
+            tree, local_name, counted_bytes, support
+        ):
             references.append(
                 Reference(
                     path, line, symbol, local_name, INBOUND_REFERENCE, True,
@@ -250,7 +249,9 @@ def find_references(
         if symbol.is_module_level:
             continue
 
-        candidates = find_candidates(snapshot, symbol.name, exclude=changed_files)
+        candidates = find_candidates(
+            snapshot, symbol.name, exclude=changed_files, defined_in=symbol.file
+        )
         if not candidates:
             continue
 
