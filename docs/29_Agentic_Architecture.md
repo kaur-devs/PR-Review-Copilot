@@ -1054,36 +1054,102 @@ Roughly 70% of the codebase is untouched. The change is concentrated in
 orchestration and in the three stages that call a model.
 
 
-## Why LangGraph — and why the case is now weak
+## Decision: LangGraph for orchestration
 
-LangGraph is a state machine whose state is checkpointed to Postgres
-after every node. Nodes are plain Python functions, so adopting it does
-not require adopting LangChain's model wrappers; `provider.py` runs
-inside a node unchanged.
+**Decided 11 November 2026.** The reasoning is kept in full, including the
+position that was abandoned, because the way the answer changed is the
+useful part.
 
-**The original justification does not survive v2.** It rested on two
-claims, both built on v1's numbers:
+### First argument, under v1 — adopt it
 
-| Claim, under v1 | Under v2 |
+Four specialists writing one list need a reducer, and 70% of the per-PR
+cost sits before verification, so resuming there matters.
+
+### Second argument, under v2 — do not adopt it
+
+Both claims were built on v1's numbers and did not survive the six
+revisions:
+
+| Claim under v1 | Under v2 |
 |---|---|
-| Four agents writing one list needs a reducer | Two agents. `asyncio.gather` and a list concat |
-| 70% of cost sits before verification, so resuming matters | ~9% sits there. Resuming the specialists saves **$0.0089** |
+| Four agents need a reducer | Two. `asyncio.gather` and a list concat |
+| 70% of cost sits before verification | ~9%. Resuming there saves **$0.0089** |
 
-Both collapse. Two concurrent coroutines and one database write of the
-candidate list after stage 7 give the same guarantees with no framework.
+### Third argument — adopt it, and this is the one that holds
 
-What survives is narrower and should be argued on its own merits:
+The second argument priced LangGraph against *doing nothing*. That was
+wrong: `src/pipeline.py` is being rewritten regardless, because the gates
+move, the summary is added and two agents replace one generator. The
+honest comparison is **marginal**.
 
-- **Per-file verifier checkpoints**, where the real $0.0456 sits — but a
-  row per completed loop does this too.
-- **Trajectory tracing.** Agent debugging needs the whole turn sequence,
-  and LangSmith provides it. `src/common/trace.py` would have to grow.
+| | Lines |
+|---|---|
+| **Shared — happens either way** | **510** |
+| `pipeline.py` rewrite | 120 |
+| `test_pipeline.py` rework | 200 |
+| `recovery.py` resume logic | 20 |
+| Recovery orchestration tests (~10 of 30; the other 20 test `db/queries.py` and do not change) | 160 |
+| Error handling for concurrent agents | 10 |
+| **Plain only** — candidates table, migration, save/load queries, per-file verdict rows, their tests | **115** |
+| **LangGraph only** — graph definition, less the imperative code it replaces, checkpointer wiring, version pinning | **110** |
+| **TOTAL plain** | **625** |
+| **TOTAL LangGraph** | **620** |
 
-**Verdict: not justified on cost.** Treat LangGraph as a choice to
-defend with measurement, not a given. The line that still holds is the
-architectural one: **agents go where the work is open-ended** (what
-should I look at?), **plain code goes where the work is known** (what
-happens next?). The orchestrator is not an agent either way.
+**The marginal difference is zero.** The plain route needs 115 lines of
+hand-rolled checkpointing; LangGraph supplies the same thing after every
+node rather than at two chosen points. Once cost is a wash, the
+tie-breakers decide: finer-grained recovery, a flow readable in fifteen
+declarative lines instead of a hundred and sixty imperative ones, and a
+framework the project is expected to have evaluated.
+
+### The boundary
+
+> **LangGraph owns the flow *between* stages.
+> Our code owns what happens *inside* a stage, and all HTTP to the model.**
+
+| LangGraph owns | We own |
+|---|---|
+| `src/pipeline.py` — the `StateGraph` | `src/agents/` — loop, tools, specialists |
+| `src/recovery.py` — resuming a thread | `src/review/provider.py` — all HTTP |
+| Checkpointing after every node | `src/judge/`, `src/filter/`, `src/context/` |
+| | `src/github/`, `src/db/`, `src/webhooks/`, `src/diff/` |
+
+This is layering, not two frameworks competing. Any file sits clearly on
+one side of the line.
+
+**`create_react_agent` is deliberately not used.** It requires a LangChain
+model object, which means `ChatGroq`, which retries *after* a 429 instead
+of waiting before one. `provider.py` reads
+`x-ratelimit-remaining-tokens` and `x-ratelimit-reset-tokens` and pauses
+pre-emptively; on an 8,000 TPM free tier that is the difference between
+working and failing. The agent loop is therefore ours.
+
+### One checkpointing mechanism, not two
+
+Because LangGraph checkpoints, **no hand-rolled state saving is built**.
+The candidates table, the save/load queries and the per-file verdict rows
+from the plain design are cancelled.
+
+The two stores that remain have strictly separate jobs:
+
+| Store | Purpose |
+|---|---|
+| LangGraph checkpoints | resuming a crashed run, nothing else |
+| `reviews`, `findings` | idempotency, dedup, dashboard, metrics |
+
+**Never read a checkpoint to answer a product question.** Nodes continue
+writing findings to the project's own tables.
+
+### Triggers to revisit
+
+Pin the version; teams report graphs breaking across minor releases.
+Timebox the migration to two days — steps 1-8 do not know LangGraph
+exists, so falling back to `asyncio.gather` stays available throughout.
+
+The architectural line still holds independently of the framework:
+**agents go where the work is open-ended** (what should I look at?),
+**plain code goes where the work is known** (what happens next?). The
+orchestrator is not an agent either way.
 
 ## Risks
 
