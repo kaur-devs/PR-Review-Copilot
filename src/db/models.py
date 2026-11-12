@@ -1,14 +1,6 @@
 """The database tables.
 
-Two ideas drive the whole design.
-
-First, every genuine delivery from GitHub gets a row, including the ones we
-ignored and the ones we had already seen. If something goes wrong later, we
-can account for every message GitHub sent us.
-
-Second, a "review" means one commit on one pull request. Pushing new code
-creates a new review. Reopening a pull request without pushing does not,
-because the code has not changed.
+Design note: docs/30_Design_Notes.md#src-db-models
 """
 
 from __future__ import annotations
@@ -36,11 +28,9 @@ class Base(DeclarativeBase):
     """Every table inherits from this. Alembic reads it to see the schema."""
 
 
-# Listed here so the database rejects a typo rather than storing a status
-# nothing understands. "superseded" means newer commits arrived and this
-# review no longer matters; "skipped" means there was nothing worth reviewing;
-# "all_repeats" means every finding had already been posted on this pull
-# request, which is a different thing from having found nothing.
+# Listed so the database rejects a typo. "superseded": a newer commit
+# arrived. "skipped": nothing worth reviewing. "all_repeats": everything
+# found had already been posted, which is not the same as finding nothing.
 REVIEW_STATUSES = (
     "received", "processing", "posting", "posted",
     "skipped", "no_findings", "all_repeats", "superseded", "failed",
@@ -259,23 +249,4 @@ class Outcome(Base):
 
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
-    )
-
-
-class RepoSuppression(Base):
-    """A kind of comment one repository has asked us to stop making.
-
-    If a team keeps dismissing our comments about, say, naming, we stop making
-    them for that team.
-    """
-
-    __tablename__ = "repo_suppressions"
-
-    repo_id: Mapped[int] = mapped_column(
-        ForeignKey("repos.id", ondelete="CASCADE"), primary_key=True
-    )
-    category: Mapped[str] = mapped_column(String(64), primary_key=True)
-    suppressed: Mapped[bool] = mapped_column(Boolean, default=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

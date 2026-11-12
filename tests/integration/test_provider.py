@@ -1,0 +1,749 @@
+import json
+
+import httpx
+import pytest
+
+from src.llm.provider import (
+    InvalidResponse,
+    LLMError,
+    LLMNotConfigured,
+    LLMProvider,
+    RateLimited,
+    UnknownTool,
+    quota,
+)
+
+
+@pytest.fixture(autouse=True)
+def reset_quota():
+    quota.reset()
+    yield
+    quota.reset()
+
+
+def fake_model(
+    *, content="hello", status=200, statuses=None, body=None, usage=True
+):
+    calls: list[httpx.Request] = []
+    remaining = list(statuses or [])
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        code = remaining.pop(0) if remaining else status
+
+        if code != 200:
+            # body is honoured on failures too, so a test can supply the
+            # provider's real error shape rather than a stand-in.
+            return httpx.Response(code, json=body or {"error": {"message": "no"}})
+
+        payload = body or {
+            "model": "openai/gpt-oss-120b",
+            "choices": [{"message": {"content": content}}],
+        }
+        if usage and "usage" not in payload:
+            payload["usage"] = {"prompt_tokens": 120, "completion_tokens": 40}
+
+        return httpx.Response(200, json=payload)
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handle)), calls
+
+
+def make(client) -> LLMProvider:
+    return LLMProvider(api_key="test-key", client=client)
+
+
+async def test_a_completion_comes_back():
+    client, _ = fake_model(content="a finding")
+
+    async with make(client) as model:
+        result = await model.complete("you review code", "look at this")
+
+    assert result.text == "a finding"
+    assert result.attempts == 1
+
+
+async def test_the_request_is_shaped_the_way_providers_expect():
+    client, calls = fake_model()
+
+    async with make(client) as model:
+        await model.complete("system words", "user words")
+
+    body = json.loads(calls[0].content)
+    assert body["model"] == "openai/gpt-oss-120b"
+    assert body["messages"][0] == {"role": "system", "content": "system words"}
+    assert body["messages"][1] == {"role": "user", "content": "user words"}
+    assert calls[0].headers["Authorization"] == "Bearer test-key"
+    assert str(calls[0].url).endswith("/chat/completions")
+
+
+async def test_temperature_is_zero_by_default():
+    """Determinism matters: the evaluation harness replays the same inputs."""
+    client, calls = fake_model()
+
+    async with make(client) as model:
+        await model.complete("s", "u")
+
+    assert json.loads(calls[0].content)["temperature"] == 0.0
+
+
+async def test_json_mode_is_requested_when_asked():
+    client, calls = fake_model(content='{"findings": []}')
+
+    async with make(client) as model:
+        await model.complete_json("s", "u")
+
+    assert json.loads(calls[0].content)["response_format"] == {"type": "json_object"}
+
+
+async def test_json_comes_back_parsed():
+    client, _ = fake_model(content='{"findings": [{"line": 7}]}')
+
+    async with make(client) as model:
+        result = await model.complete_json("s", "u")
+
+    assert result == {"findings": [{"line": 7}]}
+
+
+async def test_output_that_is_not_json_is_reported_clearly():
+    client, _ = fake_model(content="Sure! Here are the findings:")
+
+    async with make(client) as model:
+        with pytest.raises(InvalidResponse):
+            await model.complete_json("s", "u")
+
+
+async def test_rate_limiting_is_retried():
+    client, calls = fake_model(statuses=[429, 429, 200])
+
+    async with make(client) as model:
+        result = await model.complete("s", "u")
+
+    assert len(calls) == 3
+    assert result.attempts == 3
+
+
+async def test_giving_up_on_rate_limiting_says_so():
+    from src.llm.provider import MAX_ATTEMPTS
+
+    client, calls = fake_model(statuses=[429] * MAX_ATTEMPTS)
+
+    async with make(client) as model:
+        with pytest.raises(RateLimited):
+            await model.complete("s", "u")
+
+    assert len(calls) == MAX_ATTEMPTS
+
+
+async def test_a_server_error_is_retried():
+    client, calls = fake_model(statuses=[503, 200])
+
+    async with make(client) as model:
+        await model.complete("s", "u")
+
+    assert len(calls) == 2
+
+
+async def test_a_bad_request_is_not_retried():
+    """Our fault, not theirs. Trying again would fail identically."""
+    client, calls = fake_model(statuses=[400])
+
+    async with make(client) as model:
+        with pytest.raises(LLMError):
+            await model.complete("s", "u")
+
+    assert len(calls) == 1
+
+
+async def test_an_unexpected_response_shape_is_reported():
+    client, _ = fake_model(body={"unexpected": True})
+
+    async with make(client) as model:
+        with pytest.raises(InvalidResponse):
+            await model.complete("s", "u")
+
+
+async def test_usage_is_counted_towards_the_quota():
+    client, _ = fake_model()
+
+    async with make(client) as model:
+        await model.complete("s", "u")
+        await model.complete("s", "u")
+
+    assert quota.requests == 2
+    assert quota.prompt_tokens == 240
+    assert quota.completion_tokens == 80
+
+
+async def test_retries_are_counted_separately():
+    client, _ = fake_model(statuses=[429, 200])
+
+    async with make(client) as model:
+        await model.complete("s", "u")
+
+    assert quota.requests == 1
+    assert quota.retries == 1
+
+
+def test_a_missing_key_is_reported_with_what_to_do(monkeypatch):
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+    with pytest.raises(LLMNotConfigured, match="console.groq.com"):
+        LLMProvider.from_env()
+
+
+def test_the_provider_is_three_environment_variables(monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", "k")
+    monkeypatch.setenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("LLM_MODEL", "something/else:free")
+
+    model = LLMProvider.from_env()
+
+    assert model.base_url == "https://openrouter.ai/api/v1"
+    assert model.model == "something/else:free"
+
+
+# ---------------------------------------------------------------------------
+# Living inside a tokens-per-minute budget
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def forget_rate_limit_state():
+    from src.llm.provider import rate_limit
+
+    rate_limit.remaining_tokens = None
+    rate_limit.reset_in = 0.0
+    rate_limit.seen_at = 0.0
+    yield
+    rate_limit.remaining_tokens = None
+
+
+def test_groq_duration_format_is_understood():
+    from src.llm.provider import parse_duration
+
+    assert parse_duration("7.66s") == 7.66
+    assert parse_duration("2m59.56s") == 179.56
+    assert parse_duration("1h3m") == 3780.0
+    assert parse_duration(None) == 0.0
+    assert parse_duration("nonsense") == 0.0
+
+
+def model_with_headers(remaining, reset, *, status=200, retry_after=None, record=None):
+    def handle(request: httpx.Request) -> httpx.Response:
+        if record is not None:
+            record.append(request)
+        headers = {
+            "x-ratelimit-remaining-tokens": str(remaining),
+            "x-ratelimit-reset-tokens": reset,
+        }
+        if retry_after:
+            headers["retry-after"] = retry_after
+        if status != 200:
+            return httpx.Response(status, json={"error": "no"}, headers=headers)
+        return httpx.Response(200, headers=headers, json={
+            "model": "m",
+            "choices": [{"message": {"content": "hi"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        })
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+
+async def test_the_remaining_token_budget_is_remembered():
+    from src.llm.provider import rate_limit
+
+    async with make(model_with_headers(5500, "41.2s")) as model:
+        await model.complete("s", "u")
+
+    assert rate_limit.remaining_tokens == 5500
+    assert rate_limit.reset_in == 41.2
+
+
+async def test_we_wait_when_the_next_request_will_not_fit(monkeypatch):
+    """Better to pause than to be refused and retry blindly."""
+    from src.llm import budget as provider
+
+    waits = []
+
+    async def record_sleep(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(provider.asyncio, "sleep", record_sleep)
+
+    async with make(model_with_headers(100, "30s")) as model:
+        await model.complete("s", "u")
+        await model.complete("x" * 4000, "y" * 4000)
+
+    assert waits
+    assert 0 < waits[0] <= 30
+
+
+async def test_we_do_not_wait_when_there_is_room(monkeypatch):
+    from src.llm import budget as provider
+
+    waits = []
+
+    async def record_sleep(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(provider.asyncio, "sleep", record_sleep)
+
+    async with make(model_with_headers(7900, "50s")) as model:
+        await model.complete("s", "u")
+        await model.complete("short", "short")
+
+    assert waits == []
+
+
+async def test_the_provider_is_obeyed_when_it_says_how_long_to_wait(monkeypatch):
+    """Guessing is how a retry lands inside the same closed window."""
+    from src.llm import budget as provider
+
+    waits = []
+
+    async def record_sleep(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(provider.asyncio, "sleep", record_sleep)
+
+    client = model_with_headers(0, "25s", status=429, retry_after="23")
+
+    async with make(client) as model:
+        with pytest.raises(RateLimited):
+            await model.complete("s", "u")
+
+    assert 23.0 in waits
+
+
+async def test_a_wait_is_never_longer_than_the_cap(monkeypatch):
+    from src.llm import budget as provider
+
+    waits = []
+
+    async def record_sleep(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(provider.asyncio, "sleep", record_sleep)
+
+    client = model_with_headers(0, "10m", status=429, retry_after="600")
+
+    async with make(client) as model:
+        with pytest.raises(RateLimited):
+            await model.complete("s", "u")
+
+    assert max(waits) <= provider.MAX_WAIT_SECONDS
+
+
+async def test_time_spent_waiting_is_counted():
+    from src.llm.provider import quota
+
+    client = model_with_headers(0, "5s", status=429, retry_after="5")
+
+    async with make(client) as model:
+        with pytest.raises(RateLimited):
+            await model.complete("s", "u")
+
+    assert quota.waited_seconds > 0
+
+
+# ---------------------------------------------------------------- tool calls
+
+READ_FILE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "read_file",
+        "description": "Read lines from a file",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    },
+}
+
+
+def tool_call_body(*calls, content=None):
+    """A reply in which the model asks for tools instead of answering."""
+    return {
+        "model": "openai/gpt-oss-120b",
+        "choices": [
+            {
+                "finish_reason": "tool_calls" if calls else "stop",
+                "message": {
+                    "content": content,
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": name, "arguments": arguments},
+                        }
+                        for call_id, name, arguments in calls
+                    ],
+                },
+            }
+        ],
+    }
+
+
+async def test_a_tool_call_is_read_back():
+    client, _ = fake_model(
+        body=tool_call_body(("call_1", "read_file", '{"path": "api.js"}'))
+    )
+
+    async with make(client) as model:
+        answer = await model.complete_with_tools(
+            [{"role": "user", "content": "look at this"}], [READ_FILE_TOOL]
+        )
+
+    assert answer.wants_tools
+    assert answer.finish_reason == "tool_calls"
+    assert len(answer.tool_calls) == 1
+    assert answer.tool_calls[0].name == "read_file"
+    assert answer.tool_calls[0].parsed() == {"path": "api.js"}
+
+
+async def test_several_tools_in_one_turn_are_all_returned():
+    """Parallel calls are the point: three lookups for one prompt, not three."""
+    client, _ = fake_model(
+        body=tool_call_body(
+            ("call_1", "read_file", '{"path": "a.js"}'),
+            ("call_2", "grep", '{"pattern": "streamChat"}'),
+            ("call_3", "find_references", '{"symbol": "streamChat"}'),
+        )
+    )
+
+    async with make(client) as model:
+        answer = await model.complete_with_tools([], [READ_FILE_TOOL])
+
+    assert [call.name for call in answer.tool_calls] == [
+        "read_file", "grep", "find_references",
+    ]
+
+
+async def test_an_empty_content_with_a_tool_call_is_not_an_error():
+    """content is null whenever a tool is asked for. Reading it as "" and
+    carrying on would silently turn a tool call into "the model said
+    nothing"."""
+    client, _ = fake_model(
+        body=tool_call_body(("call_1", "read_file", "{}"), content=None)
+    )
+
+    async with make(client) as model:
+        answer = await model.complete_with_tools([], [READ_FILE_TOOL])
+
+    assert answer.text == ""
+    assert answer.wants_tools
+
+
+async def test_neither_content_nor_a_tool_call_is_an_error():
+    client, _ = fake_model(
+        body={"choices": [{"finish_reason": "stop", "message": {"content": None}}]}
+    )
+
+    async with make(client) as model:
+        with pytest.raises(InvalidResponse, match="neither content nor a tool call"):
+            await model.complete_with_tools([], [READ_FILE_TOOL])
+
+
+async def test_a_final_answer_carries_no_tool_calls():
+    client, _ = fake_model(content='{"findings": []}')
+
+    async with make(client) as model:
+        answer = await model.complete_with_tools([], [READ_FILE_TOOL])
+
+    assert not answer.wants_tools
+    assert answer.as_json() == {"findings": []}
+
+
+async def test_arguments_that_are_not_json_are_rejected_readably():
+    """The model does get this wrong. The loop must be able to tell it so
+    rather than crashing."""
+    client, _ = fake_model(
+        body=tool_call_body(("call_1", "read_file", "{path: api.js"))
+    )
+
+    async with make(client) as model:
+        answer = await model.complete_with_tools([], [READ_FILE_TOOL])
+
+    with pytest.raises(InvalidResponse, match="read_file was called with arguments"):
+        answer.tool_calls[0].parsed()
+
+
+async def test_a_tool_call_with_no_name_is_dropped_not_fatal():
+    client, _ = fake_model(
+        body={
+            "model": "m",
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "bad", "type": "function", "function": {}},
+                        {"id": "ok", "type": "function",
+                         "function": {"name": "grep", "arguments": "{}"}},
+                    ],
+                },
+            }],
+        }
+    )
+
+    async with make(client) as model:
+        answer = await model.complete_with_tools([], [READ_FILE_TOOL])
+
+    assert [call.name for call in answer.tool_calls] == ["grep"]
+
+
+async def test_the_tools_are_sent_in_the_request():
+    client, calls = fake_model(content="done")
+
+    async with make(client) as model:
+        await model.complete_with_tools(
+            [{"role": "user", "content": "hi"}], [READ_FILE_TOOL]
+        )
+
+    sent = json.loads(calls[0].content)
+    assert sent["tools"] == [READ_FILE_TOOL]
+    assert sent["tool_choice"] == "auto"
+    assert "response_format" not in sent
+
+
+async def test_the_whole_conversation_is_sent_every_turn():
+    client, calls = fake_model(content="done")
+    history = [
+        {"role": "system", "content": "you review code"},
+        {"role": "user", "content": "this diff"},
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": "c1", "type": "function",
+                         "function": {"name": "grep", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "no matches"},
+    ]
+
+    async with make(client) as model:
+        await model.complete_with_tools(history, [READ_FILE_TOOL])
+
+    assert json.loads(calls[0].content)["messages"] == history
+
+
+async def test_an_assistant_turn_can_be_appended_to_the_conversation():
+    """A tool result is refused unless the assistant message that asked for
+    it is already in the history, so Completion builds that message."""
+    client, _ = fake_model(
+        body=tool_call_body(("call_1", "read_file", '{"path": "a.js"}'))
+    )
+
+    async with make(client) as model:
+        answer = await model.complete_with_tools([], [READ_FILE_TOOL])
+
+    assert answer.as_message() == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "read_file", "arguments": '{"path": "a.js"}'},
+        }],
+    }
+
+
+async def test_a_tool_result_is_addressed_to_the_call_that_asked():
+    from src.llm.provider import ToolCall, tool_result_message
+
+    call = ToolCall(id="call_7", name="grep", arguments="{}")
+
+    assert tool_result_message(call, "3 matches") == {
+        "role": "tool",
+        "tool_call_id": "call_7",
+        "content": "3 matches",
+    }
+
+
+async def test_plain_completion_still_works_unchanged():
+    """classify, generate and judge all go through complete(). The tool
+    support must not have moved anything under them."""
+    client, calls = fake_model(content='{"ok": true}')
+
+    async with make(client) as model:
+        answer = await model.complete_json("be brief", "a question")
+
+    sent = json.loads(calls[0].content)
+    assert answer == {"ok": True}
+    assert sent["response_format"] == {"type": "json_object"}
+    assert "tools" not in sent
+    assert sent["messages"] == [
+        {"role": "system", "content": "be brief"},
+        {"role": "user", "content": "a question"},
+    ]
+
+
+async def test_an_invented_tool_name_is_its_own_error():
+    """The provider refuses the request before running anything, so the
+    bad call never reaches our toolbox. Telling this apart from an
+    ordinary 400 is what lets the loop correct it rather than give up."""
+    client, calls = fake_model(
+        status=400,
+        body={"error": {
+            "message": (
+                "Tool call validation failed: attempted to call tool "
+                "'search' which was not in request.tools"
+            ),
+            "code": "tool_use_failed",
+        }},
+    )
+
+    with pytest.raises(UnknownTool) as raised:
+        async with make(client) as model:
+            await model.complete_with_tools(
+                [{"role": "user", "content": "go"}],
+                [{"type": "function", "function": {"name": "grep"}}],
+            )
+
+    assert raised.value.name == "search"
+    # Not retried: asking again changes nothing, the model has to be told.
+    assert len(calls) == 1
+
+
+async def test_an_ordinary_400_is_still_a_plain_error():
+    client, _ = fake_model(status=400)
+
+    with pytest.raises(LLMError) as raised:
+        async with make(client) as model:
+            await model.complete_with_tools(
+                [{"role": "user", "content": "go"}], []
+            )
+
+    assert not isinstance(raised.value, UnknownTool)
+
+
+async def test_a_tool_call_with_nothing_offered_is_not_an_unknown_tool():
+    """The provider reports this under the same code as a bad tool name,
+    but it names no tool and the model cannot be told to stop doing it —
+    correcting it produced advice about a tool called ''."""
+    client, _ = fake_model(
+        status=400,
+        body={"error": {
+            "message": "Tool choice is none, but model called a tool",
+            "code": "tool_use_failed",
+        }},
+    )
+
+    with pytest.raises(LLMError) as raised:
+        async with make(client) as model:
+            await model.complete_with_tools(
+                [{"role": "user", "content": "go"}], []
+            )
+
+    assert not isinstance(raised.value, UnknownTool)
+
+
+# ------------------------------------------------- the budget is reserved
+
+async def test_two_concurrent_requests_do_not_both_spend_the_same_budget():
+    """The specialists run concurrently against one per-minute budget.
+    A limiter that only reports what the last response said lets both of
+    them look, both see the same headroom and both send — which is how
+    two requests of about 4,100 and 3,700 tokens overshot a budget of
+    8,000 and spent a review's time being refused.
+    """
+    import asyncio
+
+    from src.llm.provider import rate_limit
+
+    rate_limit.remaining_tokens = 8_000
+    rate_limit.limit_tokens = 8_000
+    rate_limit.reset_in = 60.0
+    rate_limit.seen_at = __import__("time").monotonic()
+
+    try:
+        await asyncio.gather(
+            rate_limit.admit(3_000), rate_limit.admit(3_000)
+        )
+        assert rate_limit.remaining_tokens == 2_000
+    finally:
+        rate_limit.remaining_tokens = None
+        rate_limit.limit_tokens = None
+
+
+async def test_headers_never_hand_back_budget_already_reserved():
+    """A response that left the provider before a sibling request arrived
+    describes a budget that has since been spent."""
+    from src.llm.provider import rate_limit
+
+    rate_limit.remaining_tokens = 8_000
+    rate_limit.limit_tokens = 8_000
+    try:
+        await rate_limit.admit(5_000)
+        assert rate_limit.remaining_tokens == 3_000
+
+        rate_limit.update({"x-ratelimit-remaining-tokens": "7900"})
+        assert rate_limit.remaining_tokens == 3_000
+    finally:
+        rate_limit.remaining_tokens = None
+        rate_limit.limit_tokens = None
+
+
+async def test_the_estimate_allows_for_the_answer_as_well_as_the_question():
+    """The provider charges what it writes too, and that is not knowable
+    until it has written it. An estimate that counts only the prompt is
+    always a little under, which on a shared budget is a steady trickle
+    of refusals nothing explains."""
+    from src.llm.provider import COMPLETION_ALLOWANCE, _estimate_tokens
+
+    assert _estimate_tokens([{"role": "user", "content": ""}], None) == (
+        COMPLETION_ALLOWANCE
+    )
+
+
+async def test_a_spent_daily_budget_fails_at_once_instead_of_retrying():
+    """A day's budget does not refill in ninety seconds. Retrying one
+    turns a clear failure into four attempts and six minutes of silence."""
+    from src.llm.provider import DailyQuotaExhausted
+
+    client, calls = fake_model(
+        status=429,
+        body={"error": {
+            "message": (
+                "Rate limit reached for model `openai/gpt-oss-120b` ... on "
+                "tokens per day (TPD): Limit 200000, Used 198022"
+            ),
+        }},
+    )
+
+    with pytest.raises(DailyQuotaExhausted) as raised:
+        async with make(client) as model:
+            await model.complete("be brief", "a question")
+
+    assert len(calls) == 1
+    assert "day's tokens" in str(raised.value)
+
+
+async def test_a_per_minute_limit_is_still_retried():
+    """The minute budget does refill, so this one is worth waiting for."""
+    client, calls = fake_model(statuses=[429, 200], content="done")
+
+    async with make(client) as model:
+        answer = await model.complete("be brief", "a question")
+
+    assert answer.text == "done"
+    assert len(calls) == 2
+
+
+async def test_each_model_has_its_own_budget():
+    """Groq counts tokens per model id. One shared limiter made a wait
+    caused by the review model hold up the judge as well, although the
+    judge's own budget was untouched."""
+    from src.llm.provider import limiter_for
+
+    review = limiter_for("openai/gpt-oss-120b")
+    judge = limiter_for("qwen/qwen3.8-27b")
+
+    assert review is not judge
+    assert limiter_for("openai/gpt-oss-120b") is review
+
+    review.remaining_tokens = 8_000
+    review.limit_tokens = 8_000
+    try:
+        await review.admit(5_000)
+        assert review.remaining_tokens == 3_000
+        assert judge.remaining_tokens is None
+    finally:
+        review.remaining_tokens = None
+        review.limit_tokens = None

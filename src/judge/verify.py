@@ -8,7 +8,7 @@ from src.context.bundle import ContextBundle
 from src.diff.parse import FileDiff
 from src.judge.prompts import SYSTEM, build_user_prompt
 from src.review.findings import Finding
-from src.review.provider import LLMError, LLMProvider
+from src.llm.provider import LLMError, LLMNotConfigured, LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,7 @@ async def judge_findings(
     context: ContextBundle,
     *,
     client=None,
+    provider: LLMProvider | None = None,
 ) -> JudgeResult:
     """Ask a second model whether each finding is really supported.
 
@@ -109,17 +110,22 @@ async def judge_findings(
         logger.info("judge is switched off, keeping all %s findings", len(findings))
         return JudgeResult(kept=list(findings), ran=False)
 
-    try:
-        provider = LLMProvider.from_env(client=client, model=judge_model_name())
-    except LLMError as error:
-        logger.warning("judge unavailable, keeping everything: %s", error)
-        return JudgeResult(kept=list(findings), ran=False)
+    prompt = build_user_prompt(findings, diffs, context)
 
     try:
-        async with provider as model:
-            answer = await model.complete_json(
-                SYSTEM, build_user_prompt(findings, diffs, context)
-            )
+        if provider is not None:
+            # Reused as it is. Building a second would open another client
+            # and ignore the one a test injected, sending real traffic from
+            # a run meant to be offline.
+            answer = await provider.complete_json(SYSTEM, prompt)
+        else:
+            async with LLMProvider.from_env(
+                client=client, model=judge_model_name()
+            ) as model:
+                answer = await model.complete_json(SYSTEM, prompt)
+    except LLMNotConfigured as error:
+        logger.warning("judge unavailable, keeping everything: %s", error)
+        return JudgeResult(kept=list(findings), ran=False)
     except LLMError as error:
         logger.warning("judge failed, keeping everything: %s", error)
         return JudgeResult(kept=list(findings), ran=False)

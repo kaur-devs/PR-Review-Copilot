@@ -1,17 +1,6 @@
 """Picking up reviews whose process died part way through.
 
-Two facts make this necessary. GitHub never retries a delivery, so nothing
-arrives to prompt a second attempt. And the uniqueness rule on repository,
-pull request and commit refuses a second claim on the same commit, so even a
-manual redelivery used to be turned away. A review interrupted by a crash or
-a restart was stuck in "processing" for good.
-
-So the service looks for them itself, when it starts.
-
-Running on startup rather than on a timer is a deliberate limit. The common
-cause of an interrupted review is the process stopping, and a process that
-stops is a process that starts again. What this does not catch is a review
-abandoned by a process that is still running, which would need a scheduler.
+Design note: docs/30_Design_Notes.md#src-recovery
 """
 
 from __future__ import annotations

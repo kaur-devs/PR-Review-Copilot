@@ -458,7 +458,7 @@ directly rather than from `alembic.ini`, so hosted databases receive their SSL
 
 ---
 
-## 7. Pipeline — `src/pipeline.py` · built through phase 2
+## 7. Pipeline — `src/pipeline/record.py` · built through phase 2
 
 ```python
 async def process_pull_request(event: PullRequestEvent, review_id: int, *, github_client=None) -> None

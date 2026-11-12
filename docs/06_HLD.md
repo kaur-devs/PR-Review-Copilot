@@ -54,7 +54,7 @@ Status is as built, not as planned.
 | Severity/Confidence Gate | Holds back low severity and low confidence | `src/filter/` | built |
 | Comment Poster | One batched review, inline comments by line and side | `src/github/review.py` | built |
 | Outcome Tracker | Records resolved and reopened comment threads | `src/outcomes/` | built, not yet exercised on a real thread |
-| Evaluation harness | Replays labelled pull requests, scores, runs ablations | `src/eval/` | built |
+| Evaluation harness | Replays labelled pull requests, scores, runs ablations | `src/evaluation/` | built |
 | Deployment | Somewhere GitHub can reach without a laptop | — | **not started** |
 
 ### Known limitations, measured

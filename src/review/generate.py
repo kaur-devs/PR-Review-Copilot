@@ -9,7 +9,7 @@ from src.context.bundle import ContextBundle
 from src.diff.parse import FileDiff
 from src.review.findings import CATEGORIES, SEVERITIES, Finding
 from src.review.prompts import build_system_prompt, build_user_prompt
-from src.review.provider import LLMError, LLMProvider
+from src.llm.provider import LLMError, LLMProvider
 
 logger = logging.getLogger(__name__)
 

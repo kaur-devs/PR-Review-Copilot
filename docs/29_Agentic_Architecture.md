@@ -113,7 +113,7 @@ have and the agentic redesign does not touch it.
 
 | | NOW | NEW |
 |---|---|---|
-| **Component** | `src/pipeline.py` | LangGraph `StateGraph` |
+| **Component** | `src/pipeline/record.py` | LangGraph `StateGraph` |
 | **State lives in** | `reviews.status` column | LangGraph checkpoint + `reviews` |
 | **Claiming** | conditional `UPDATE ... WHERE status='received'` | same, plus `thread_id` |
 | **On crash** | `src/recovery.py` re-runs the whole review | resume at the last finished node |
@@ -261,9 +261,16 @@ require the agent to cite tool output in every finding.
 | **Component** | `src/classification/` | triage node |
 | **Job** | label each file: logic / config / test / docs | label the PR, choose specialists |
 | **Scope** | per file | whole PR |
-| **Loop** | no | no — single call |
-| **Model** | `gpt-oss-20b` (cheap) | `gpt-oss-20b` |
-| **Tokens** | 6,000 in / 600 out | 2,500 in / 300 out |
+| **Loop** | no | no |
+| **Model** | `gpt-oss-120b` | **none — no model call** |
+| **Tokens** | 6,000 in / 600 out | 0 |
+
+> **Shipped differently.** This table planned a cheap `gpt-oss-20b` call
+> for routing. `src/agents/triage.py` makes none: `classify()` has already
+> labelled every file by the time routing runs, so `specialists_for()` is a
+> dictionary lookup over labels we have paid for once. The third model this
+> design budgeted for was never needed, and `20b` appears nowhere in the
+> code. NOW's own classifier runs on `gpt-oss-120b`, not `20b`.
 
 NOW classifies files so `generate()` can treat a config change differently
 from a logic change. Rules handle the obvious cases (`*.md` is docs) and
@@ -275,8 +282,9 @@ NEW keeps that and adds routing: reading only file names, line counts and
 the PR title, it answers *which specialists should wake up*.
 
 **This stage controls the entire bill.** A docs-only PR wakes nobody and
-costs $0.0003. Without triage, every PR pays for both specialists
-($0.0089) whatever it contains.
+costs nothing. Without triage, every PR pays for both specialists
+($0.0089) whatever it contains — and because routing is free, that saving
+has no call to pay for.
 
 
 ## Stage 7 — Specialist reviewer agents
@@ -542,7 +550,7 @@ Every cost figure below belongs to one of these. They are never mixed.
 
 | | **B — Free-tier** (recommended) | **A — Premium verifier** |
 |---|---|---|
-| Triage | `gpt-oss-20b` | `gpt-oss-20b` |
+| Triage | none — no model call | none — no model call |
 | Specialists | `gpt-oss-120b` | `gpt-oss-120b` |
 | **Agentic verifier** | **`qwen3.8-27b`** | Claude Sonnet 5.5 |
 | Cheap verifier | `gpt-oss-120b` | `gpt-oss-120b` |
@@ -845,9 +853,12 @@ Config B's load, split by bucket:
 
 | Model | Tokens/review | Free: time | Free: reviews/day |
 |---|---|---|---|
-| `gpt-oss-20b` | 2,800 | 21s | 71 |
 | **`gpt-oss-120b`** | **68,800** | **8.6 min** | **2.9** |
 | `qwen3.8-27b` | 38,400 | 4.8 min | 5.2 |
+
+Only two buckets are in use. `gpt-oss-20b`'s row is gone with the triage
+call that would have filled it; its limits stay in the table above because
+it is still the obvious model to reach for if a bucket needs splitting.
 
 | Plan | Time per review | Reviews/day |
 |---|---|---|
@@ -857,19 +868,30 @@ Config B's load, split by bucket:
 The daily cap matters more than the per-minute rate. On the Developer
 plan TPD is removed entirely; that is the real unlock, not the 31x TPM.
 
-**Free-tier optimisation: spread the load.** `gpt-oss-120b` carries both
-specialists plus the fixer and summary, which is why it is the
-bottleneck. Moving one specialist to `gpt-oss-20b` cuts its load to
-~42,700 and lifts capacity from **2.9 to 4.7 reviews/day** at no cost —
-one environment variable. The trade is a weaker model on one of the two
-review prompts, which the eval harness can price.
+**Free-tier optimisation: spread the load.** `gpt-oss-120b` carries
+classification, both specialists and the summary, which is why it is the
+bottleneck. Moving one specialist to `gpt-oss-20b` would give it an
+independent per-minute bucket — the limits above are per model ID — and
+reintroduce the third model this design originally budgeted for. The
+trade is a weaker model on one of the two review prompts, which the eval
+harness can price.
+
+> **Not built, and two corrections to the claim above.** It is *not* "one
+> environment variable": `specialists()` takes a single provider and gives
+> it to both prompts, and `_resources()` in `src/pipeline/graph.py` hands out exactly
+> two, `model` and `judge`, so a third has to be threaded through
+> `agentic_run.py` and the graph config. And the pressure it relieves is
+> smaller than estimated: measured usage is ~27,700 tokens per review
+> against the ~101,500 assumed here, so free-tier capacity is nearer 7
+> reviews/day than 2.9. Revisit this only if rate-limit waits dominate a
+> real run.
 
 Even on the Developer plan the review is not fully compute-bound: the
 specialists' 52,200 tokens need 12.5s of rate budget against 5.1s of
 compute, which is why the total is 30s rather than the 17.2s the pure
 compute model predicts.
 
-`src/review/provider.py` reads `x-ratelimit-remaining-tokens` and
+`src/llm/provider.py` reads `x-ratelimit-remaining-tokens` and
 `x-ratelimit-reset-tokens` and waits before hitting a 429 rather than
 retrying after one. That file stays ours in NEW because `ChatGroq` does
 not do this.
@@ -1041,11 +1063,11 @@ looks like.
 | `src/context/` | **re-exposed as tools**, logic unchanged |
 | `src/filter/gate.py`, `repeat.py` | **unchanged** — stays deterministic |
 | `src/filter/suggest.py` | unchanged, gains a model call upstream |
-| `src/review/provider.py` | **kept**, called from inside nodes |
+| `src/llm/provider.py` | **kept**, called from inside nodes |
 | `src/classification/` | becomes the triage node |
 | `src/review/generate.py` | becomes two specialist agents |
 | `src/judge/verify.py` | becomes the verifier agent, with tools |
-| `src/pipeline.py` | becomes a LangGraph `StateGraph` |
+| `src/pipeline/record.py` | becomes a LangGraph `StateGraph` |
 | `src/recovery.py` | kept as the scanner; resumes a thread, not a run |
 | *(new)* summary node | added |
 | *(new)* toolbox layer | added |
@@ -1078,7 +1100,7 @@ revisions:
 ### Third argument — adopt it, and this is the one that holds
 
 The second argument priced LangGraph against *doing nothing*. That was
-wrong: `src/pipeline.py` is being rewritten regardless, because the gates
+wrong: `src/pipeline/record.py` is being rewritten regardless, because the gates
 move, the summary is added and two agents replace one generator. The
 honest comparison is **marginal**.
 
@@ -1109,8 +1131,8 @@ framework the project is expected to have evaluated.
 
 | LangGraph owns | We own |
 |---|---|
-| `src/pipeline.py` — the `StateGraph` | `src/agents/` — loop, tools, specialists |
-| `src/recovery.py` — resuming a thread | `src/review/provider.py` — all HTTP |
+| `src/pipeline/record.py` — the `StateGraph` | `src/agents/` — loop, tools, specialists |
+| `src/recovery.py` — resuming a thread | `src/llm/provider.py` — all HTTP |
 | Checkpointing after every node | `src/judge/`, `src/filter/`, `src/context/` |
 | | `src/github/`, `src/db/`, `src/webhooks/`, `src/diff/` |
 
@@ -1171,7 +1193,7 @@ orchestrator is not an agent either way.
 
 Both architectures stay behind environment flags, as `CONTEXT_ENABLED`,
 `JUDGE_ENABLED` and `SUGGESTIONS_ENABLED` already are. The evaluation
-harness in `src/eval/` runs the same cases through both and reports
+harness in `src/evaluation/` runs the same cases through both and reports
 precision, recall, comments per PR, latency and cost.
 
 A measured comparison of the two designs is worth more than either design

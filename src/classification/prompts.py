@@ -3,16 +3,13 @@ from __future__ import annotations
 from src.classification.kinds import CHANGE_KINDS
 from src.context.symbols import Symbol
 from src.diff.parse import FileDiff
-from src.review.provider import CHARACTERS_PER_TOKEN
+from src.llm.provider import CHARACTERS_PER_TOKEN
 
 MAX_PREVIEW_LINES = 12
 
-# Free tiers cap tokens per minute, not per request. A request larger than the
-# whole window can never succeed however long we wait, so the only fix is to
-# send less at once. Three thousand tokens of files leaves room in the same
-# minute for the system prompt, the reply, and the generation calls that
-# follow. A 65-file pull request asked for 14,874 tokens in one request and
-# was refused outright.
+# A request larger than the whole per-minute window can never succeed, so
+# batching is the only fix: one 65-file pull request asked for 14,874 tokens
+# and was refused outright.
 MAX_PROMPT_TOKENS_PER_REQUEST = 3000
 MAX_PROMPT_CHARACTERS = MAX_PROMPT_TOKENS_PER_REQUEST * CHARACTERS_PER_TOKEN
 

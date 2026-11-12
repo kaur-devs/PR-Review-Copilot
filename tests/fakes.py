@@ -155,6 +155,11 @@ def fake_model(
                     for n in range(len(findings or []))
                 ]
             }
+        elif "opening comment" in system:
+            answer = {
+                "what_changed": "A change was made.",
+                "risks": ["something worth a look"],
+            }
         else:
             answer = {"findings": findings or []}
 

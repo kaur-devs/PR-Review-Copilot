@@ -1,15 +1,6 @@
 """The loop that lets a model look things up before it answers.
 
-Send the conversation; the model replies with either tool calls or an
-answer; run the tools, append what they said, send again. That is the
-whole idea. Everything else in this file is about making sure it stops.
-
-An unbounded loop is the real risk in an agentic design, not the cost of
-any single turn. Published agent harnesses cap at fifty steps or more
-because the failure mode is a long tail: a model that keeps re-reading
-the same file, politely, until the budget is gone. Four separate limits
-guard against that, and the loop records what it did so the turn count
-can be measured rather than assumed.
+Design note: docs/30_Design_Notes.md#src-agents-loop
 """
 
 from __future__ import annotations
@@ -18,11 +9,12 @@ import logging
 from dataclasses import dataclass, field
 
 from src.agents.tools import Toolbox
-from src.review.provider import (
+from src.llm.provider import (
     Completion,
     LLMError,
     LLMProvider,
     ToolCall,
+    UnknownTool,
     tool_result_message,
 )
 
@@ -53,6 +45,11 @@ ALREADY_RAN = (
     "You already ran this exact call earlier in this conversation and the "
     "result has not changed. Ask something different, or answer."
 )
+
+# How many times a hallucinated tool name may be corrected. Two, because
+# the first correction is usually enough and a model that ignores it twice
+# is not going to be talked round by a third.
+MAX_TOOL_NAME_CORRECTIONS = 2
 
 
 @dataclass
@@ -130,17 +127,34 @@ async def run_agent(
     ]
     run = AgentRun()
     seen: dict[str, str] = {}
+    corrections = 0
 
     for number in range(1, max_turns + 1):
         try:
             completion = await model.complete_with_tools(
                 messages, tools, temperature=temperature
             )
+        except UnknownTool as error:
+            # The provider rejected the request, so there is no tool call to
+            # answer and nothing of this turn survives in `messages`. Say
+            # what went wrong as a plain instruction and let it try again.
+            corrections += 1
+            logger.warning("agent turn %s: %s", number, error)
+            if corrections > MAX_TOOL_NAME_CORRECTIONS:
+                run.stopped_because = STOPPED_FAILED
+                run.error = str(error)
+                break
+
+            messages.append({"role": "user", "content": wrong_tool_message(tools)})
+            continue
         except LLMError as error:
+            # Not fatal. Everything read so far is still in `messages`, and
+            # abandoning it would throw away a run that has already been
+            # paid for, so fall through and ask for the conclusion.
             logger.warning("agent turn %s failed: %s", number, error)
             run.stopped_because = STOPPED_FAILED
             run.error = str(error)
-            return run
+            break
 
         run.turns.append(
             Turn(
@@ -230,29 +244,32 @@ async def _ask_for_the_answer(
     A run that stops at a cap has paid for everything it looked at, so
     not asking for the conclusion wastes the whole run.
 
-    The tools stay in the request even though no more are wanted. Sending
-    an empty list makes the provider infer `tool_choice: none`, and a
-    model that then emits a tool call anyway — which gpt-oss does — is
-    refused outright:
+    The tools are withheld here. Asking politely does not work: told it has
+    no lookups left but still shown five of them, gpt-oss reaches for one
+    anyway, and a run that spent four turns reading ends with no answer at
+    all. With no tools in the request it answers from what it has.
 
-        400 Tool choice is none, but model called a tool
-
-    That turned the safety net into the thing that lost the run. Instead
-    the tools stay offered and the instruction asks for an answer; if the
-    model reaches for one more lookup it is served, once, and asked
-    again.
+    It is not quite that simple, though, because the model can emit a tool
+    call even when none was offered and the provider then refuses the whole
+    request. So a refusal falls back to offering the tools, serving one
+    round, and asking again — the two failure modes do not overlap, and
+    between them one of the attempts gets through.
     """
     messages.append({"role": "user", "content": LAST_CALL})
 
     for attempt in range(1, LAST_CALL_ATTEMPTS + 1):
         try:
-            completion = await model.complete_with_tools(
-                messages, tools, temperature=temperature
-            )
-        except LLMError as error:
-            logger.warning("could not get a final answer: %s", error)
-            run.error = str(error)
-            return
+            completion = await _final_turn(model, messages, temperature)
+        except LLMError as first_error:
+            logger.info("no answer without tools (%s), offering them", first_error)
+            try:
+                completion = await model.complete_with_tools(
+                    messages, tools, temperature=temperature
+                )
+            except LLMError as error:
+                logger.warning("could not get a final answer: %s", error)
+                run.error = str(error)
+                return
 
         run.turns.append(
             Turn(
@@ -274,3 +291,26 @@ async def _ask_for_the_answer(
         messages.append(completion.as_message())
         _serve(completion, toolbox, messages, seen)
         messages.append({"role": "user", "content": LAST_CALL})
+
+
+async def _final_turn(
+    model: LLMProvider, messages: list[dict], temperature: float
+) -> Completion:
+    """Ask with no tools offered, so the only thing left to do is answer."""
+    return await model.complete_with_tools(messages, [], temperature=temperature)
+
+
+def wrong_tool_message(tools: list[dict]) -> str:
+    """Told to the model after it invents a tool name.
+
+    Naming what does exist, rather than only what does not, is what makes
+    the next turn different from the one that just failed.
+    """
+    names = ", ".join(
+        tool.get("function", {}).get("name", "") for tool in tools
+    )
+    return (
+        "That call was rejected: you asked for a tool that does not exist. "
+        f"The only tools available are: {names}. "
+        "Call one of those, or answer now with what you already have."
+    )

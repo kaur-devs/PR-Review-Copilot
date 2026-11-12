@@ -1,18 +1,6 @@
 """Reading and writing rows.
 
-One idea runs through every function here: we never check whether something
-exists and then write it. We let the database decide.
-
-Checking first looks correct and is not. If two messages about the same
-commit arrive at the same moment, both look, both see nothing, and both
-write. You end up reviewing the same commit twice.
-
-Instead we always try to write, and tell the database "if this clashes with
-an existing row, do nothing". The database handles one request at a time, so
-exactly one of the two wins. The loser gets told nothing was written, which
-is how we know it was a duplicate.
-
-In SQL that instruction is called ON CONFLICT DO NOTHING.
+Design note: docs/30_Design_Notes.md#src-db-queries
 """
 
 from __future__ import annotations
@@ -196,6 +184,46 @@ async def claim_review(
     # correct and we stop here. But if the holder was abandoned part way
     # through, nothing else is ever going to finish it.
     return await reclaim_abandoned_review(session, repo_id, pull_request)
+
+
+async def supersede_earlier_reviews(
+    session: AsyncSession, repo_id: int, pr_number: int, keep: int
+) -> list[int]:
+    """Retire unfinished reviews of older commits on this pull request.
+
+    Returns the ids retired.
+
+    Pushing twice in a minute is ordinary, and without this each push gets
+    its own full review. They all finish, they all post, and the comments
+    point at commits nobody is looking at any more. Worse on a free tier:
+    they share one token budget, so two reviews of the same pull request
+    each run at half speed.
+
+    Only work that has not posted anything is retired. A review that
+    already commented cannot be taken back, so "posting" and everything
+    after it is left alone.
+    """
+    result = await session.execute(
+        update(Review)
+        .where(
+            Review.repo_id == repo_id,
+            Review.pr_number == pr_number,
+            Review.id != keep,
+            Review.status.in_(("received", "processing")),
+        )
+        .values(status="superseded")
+        .returning(Review.id)
+    )
+    retired = list(result.scalars())
+    await session.commit()
+
+    if retired:
+        logger.info(
+            "superseded review(s) %s: a newer commit arrived on #%s",
+            ", ".join(str(review_id) for review_id in retired),
+            pr_number,
+        )
+    return retired
 
 
 async def reclaim_abandoned_review(
