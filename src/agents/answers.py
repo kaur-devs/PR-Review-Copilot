@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from src.review.provider import InvalidResponse
+from src.llm.provider import InvalidResponse
 
 
 def read_json_object(answer: str) -> dict:

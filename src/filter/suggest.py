@@ -1,25 +1,6 @@
 """Deciding which findings may offer a replacement line.
 
-A wrong comment costs the reader ten seconds. A wrong suggestion costs them
-one click, and the broken code is then theirs. So a suggestion passes a
-stricter gate than the comment carrying it, and a refused suggestion never
-hides the comment: the finding posts as prose instead.
-
-The last two checks are the real ones. The suggestion is applied to the file
-as it exists at the reviewed commit, and the result must both compile and sit
-at the same indentation as the line it replaced.
-
-Note that this does not use tree-sitter, which the rest of the project does.
-tree-sitter is deliberately tolerant: it has to extract symbols from code that
-may be broken, so it never raises. Here we want the opposite, and measurably
-so. tree-sitter accepts both of these happily:
-
-    def average(values):
-        total = sum(values)
-    return total / len(values)        <- de-indented out of the function
-
-CPython does not: that is a SyntaxError, and an over-indented line is an
-IndentationError. Different job, different tool.
+Design note: docs/30_Design_Notes.md#src-filter-suggest
 """
 
 from __future__ import annotations
@@ -34,12 +15,8 @@ from src.review.findings import SEVERITY_HIGH, SEVERITY_MEDIUM, Finding
 
 logger = logging.getLogger(__name__)
 
-# Stricter than the posting gate in src/filter/gate.py, which posts at 0.6.
-# This started at high severity only, and on the first live run that refused
-# three correct, well-formed suggestions because the model had labelled a
-# crash "medium". Severity is the model's opinion about impact; confidence and
-# the judge are what say whether the finding is real, so those carry the gate
-# and severity no longer does.
+# Stricter than the 0.6 posting gate. High-severity-only was tried first and
+# refused three correct suggestions the model had labelled "medium".
 SUGGESTABLE_SEVERITIES = frozenset({SEVERITY_HIGH, SEVERITY_MEDIUM})
 MINIMUM_CONFIDENCE = 0.8
 

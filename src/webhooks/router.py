@@ -17,7 +17,13 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import get_settings
-from src.db.queries import claim_review, ensure_repo, record_delivery, update_delivery
+from src.db.queries import (
+    claim_review,
+    ensure_repo,
+    record_delivery,
+    supersede_earlier_reviews,
+    update_delivery,
+)
 from src.db.session import get_session
 from src.outcomes.events import is_thread_event, read_thread_event
 from src.outcomes.record import record_thread_outcome
@@ -140,6 +146,13 @@ async def receive_github_webhook(
         return accepted("duplicate", reason="commit already claimed")
 
     await update_delivery(session, delivery_row_id, review_id=review_id)
+
+    # This commit is the one that matters now. Anything still queued or
+    # running for an older commit on the same pull request is retired, so
+    # it neither posts stale comments nor competes for the token budget.
+    await supersede_earlier_reviews(
+        session, repo_id, pull_request.pr_number, keep=review_id
+    )
 
     # Runs after the reply has been sent, which is what keeps us inside
     # GitHub's ten second limit.

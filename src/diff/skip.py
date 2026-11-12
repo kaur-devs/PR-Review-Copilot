@@ -44,13 +44,9 @@ GENERATED_SUFFIXES = (
     ".lock",
 )
 
-# Which languages we review is decided in one place, src/context/languages.py,
-# and read here. Registering a language there is what stops its files being
-# skipped: there is no second list to remember.
-#
-# A file we cannot parse would reach the model with no symbols and no
-# connected code, which is a worse review wearing the same label as a good
-# one. Skipping it and saying so is the honest option.
+# Read from src/context/languages.py so registering a language there is the
+# only step. A file we cannot parse reaches the model with no symbols and no
+# connected code, so it is skipped rather than reviewed badly.
 
 
 @dataclass(frozen=True)

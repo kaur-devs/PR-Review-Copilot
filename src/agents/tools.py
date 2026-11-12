@@ -1,21 +1,6 @@
 """What an agent is allowed to look at.
 
-These are the same functions `src/context/` already uses to build context
-up front; the difference is who decides when to call them. The context
-builder guesses what will matter before anyone knows what the bug is. An
-agent asks because of what it already suspects.
-
-Two rules shape everything here.
-
-Every tool returns a **string**, because that is what goes back into the
-conversation. Shape matters as much as content: line numbers are included
-so the model can cite them, and paths are repo-relative so it can pass
-them straight back to another tool.
-
-Every tool is **bounded**. A grep over a large repository could return
-thousands of lines, and on an 8,000 tokens-per-minute budget one careless
-answer costs the whole review. Where output is cut, the tool says so,
-rather than letting the model believe it saw everything.
+Design note: docs/30_Design_Notes.md#src-agents-tools
 """
 
 from __future__ import annotations
@@ -27,7 +12,7 @@ from src.context.languages import REVIEWABLE_SUFFIXES, support_for
 from src.context.references import verify_references
 from src.context.snapshot import Snapshot
 from src.context.symbols import Symbol, definitions_named
-from src.review.provider import InvalidResponse, ToolCall
+from src.llm.provider import InvalidResponse, ToolCall
 
 logger = logging.getLogger(__name__)
 

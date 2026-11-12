@@ -1,15 +1,6 @@
 """Which specialists are worth waking for this pull request.
 
-This is the stage that controls the bill. A documentation-only change
-should cost nothing, and a dependency bump should not pay two agents to
-read a version number. Waking both specialists on every pull request
-would roughly triple the cost of the system for no gain on the pull
-requests that cannot contain the problems they look for.
-
-It needs **no model call of its own**. `src/classification/` already
-labels every changed file, using rules where the path is decisive and
-the model only where it is not, so the routing here is a lookup over
-labels that have already been paid for.
+Design note: docs/30_Design_Notes.md#src-agents-triage
 """
 
 from __future__ import annotations

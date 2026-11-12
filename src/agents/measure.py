@@ -1,16 +1,6 @@
 """Measure how many turns a specialist actually takes.
 
-Every cost and latency figure in docs/29 rests on one assumed number:
-three turns per agent. Three was a guess. This runs the real agents
-against real pull requests and counts.
-
-The answer changes the plan rather than decorating it. At two turns the
-free tier becomes comfortable; at six the design needs cutting back. So
-this is deliberately a measurement and nothing else: it posts nothing,
-writes nothing to the database, and runs no verifier.
-
-    python -m src.agents.measure --cases eval/cases.json
-    python -m src.agents.measure --repo owner/name --pr 42 --installation 123
+Design note: docs/30_Design_Notes.md#src-agents-measure
 """
 
 from __future__ import annotations
@@ -33,9 +23,9 @@ from src.context.snapshot import open_snapshot
 from src.diff.files import ChangedFileSet, fetch_changed_files
 from src.diff.parse import parse_changed_files
 from src.diff.skip import worth_reviewing
-from src.eval.cases import load_cases
+from src.evaluation.cases import load_cases
 from src.github.client import GitHubClient
-from src.review.provider import LLMNotConfigured, LLMProvider, quota
+from src.llm.provider import LLMNotConfigured, LLMProvider, quota
 
 logger = logging.getLogger(__name__)
 

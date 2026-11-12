@@ -17,7 +17,7 @@ things such a wrapper cannot have:
 |---|---|
 | A tree-sitter AST of the repository at the review commit | `src/context/symbols.py` |
 | The repository itself, extracted on disk | `src/context/snapshot.py` |
-| An ablation harness that can measure whether a change helped | `src/eval/run.py` |
+| An ablation harness that can measure whether a change helped | `src/evaluation/run.py` |
 
 Every feature below is ranked by how much it leans on those three, because
 those are the parts that cannot be copied by prompting a model harder.
@@ -269,7 +269,7 @@ has an answer rather than an absence:
 
 What was given up: tracing, and structured-output retries. Smaller versions of
 both were written — `src/common/trace.py` and
-`src/review/provider.py`. `LLMProvider` is the only module that talks to a
+`src/llm/provider.py`. `LLMProvider` is the only module that talks to a
 model, so this is not a one-way door.
 
 ## Scope discipline

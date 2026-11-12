@@ -21,6 +21,15 @@ load_dotenv(PROJECT_ROOT / ".env")
 # Then override everything the tests should not use real values for. The test
 # database is a completely separate database, so a test run can never touch
 # development data.
+# The suite drops and recreates every table, then truncates between tests.
+# Pointed at the development database that is one command away from deleting
+# the real review history, so it refuses rather than trusting the .env.
+if os.environ.get("TEST_DATABASE_URL") == os.environ.get("DATABASE_URL"):
+    raise RuntimeError(
+        "TEST_DATABASE_URL and DATABASE_URL are the same database. "
+        "The tests would erase it. Point TEST_DATABASE_URL somewhere separate."
+    )
+
 os.environ["DATABASE_URL"] = os.environ["TEST_DATABASE_URL"]
 os.environ["GITHUB_WEBHOOK_SECRET"] = TEST_SECRET
 os.environ["GITHUB_APP_ID"] = "000000"
@@ -89,12 +98,22 @@ def run_on_database(work):
     return asyncio.run(go())
 
 
-@pytest.fixture(scope="session", autouse=True)
-def database_schema():
-    """Build the tables once, before any test runs.
+def needs_database(request) -> bool:
+    """True for a test under tests/database/.
 
-    This uses the test database, which is a completely separate database from
-    the one used while developing, so a test run can never delete real data.
+    The folder is the marker. Making it autouse for everything meant no
+    test could run without Postgres, including the ones that touch nothing
+    but a pure function.
+    """
+    return "tests/database/" in request.path.as_posix()
+
+
+@pytest.fixture(scope="session")
+def database_schema():
+    """Build the tables once, for the tests that need them.
+
+    Against the test database, which is separate from the development one,
+    so a run can never delete real data.
     """
     from src.db.models import Base
 
@@ -107,15 +126,21 @@ def database_schema():
 
 
 @pytest.fixture(autouse=True)
-def empty_tables(database_schema):
-    """Empty every table before each test.
+def empty_tables(request):
+    """Empty every table before each database test.
 
-    Each test then starts from nothing, and row numbering starts at 1 again,
-    which keeps the tests easy to read.
+    Each one starts from nothing and row ids start at 1 again, which keeps
+    the assertions readable.
     """
+    if not needs_database(request):
+        yield
+        return
+
     from sqlalchemy import text
 
     from src.db.models import Base
+
+    request.getfixturevalue("database_schema")
 
     table_names = ", ".join(Base.metadata.tables)
 
@@ -126,6 +151,21 @@ def empty_tables(database_schema):
 
     run_on_database(truncate)
     yield
+
+
+@pytest.fixture(autouse=True)
+def forget_rate_limits():
+    """No test inherits another's token budget.
+
+    The limiter remembers what a provider last said, per model, for the
+    life of the process. A budget left over from one test makes the next
+    one wait for a window that never opens, which looks like a hang.
+    """
+    from src.llm.provider import forget_rate_limits as forget
+
+    forget()
+    yield
+    forget()
 
 
 @pytest.fixture
@@ -152,7 +192,7 @@ def client(database_schema, recorded_pipeline_calls):
 @pytest.fixture(autouse=True)
 def no_backoff_waiting(monkeypatch):
     """Retry backoff is real seconds. Tests should not sit through it."""
-    from src.review import provider
+    from src.llm import budget as provider
 
     async def instant(seconds):
         return None

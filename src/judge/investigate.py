@@ -1,30 +1,6 @@
 """Verification that can go and look.
 
-`src/judge/verify.py` asks a second model whether each finding holds up,
-but shows it only what the generator already saw. When that is not
-enough it answers `unverifiable`, and the finding is kept at a
-discount:
-
-    UNVERIFIABLE_PENALTY = 0.7
-
-That constant is an admission. It exists because the judge wanted to
-check something and had no way to check it. This module gives the judge
-the toolbox, so it can open the file it was wondering about.
-
-Two choices keep it affordable, since verification carries most of the
-per-review bill.
-
-**Selective.** Only a high-severity finding, or one the generator was
-unsure about, earns a tool loop. A medium-severity finding the generator
-was confident about goes to the cheap single call.
-
-**Batched per file, not per candidate.** Candidates cluster in the files
-the pull request touched and their evidence overlaps almost entirely.
-One loop per file opens that file once instead of once per candidate.
-
-Verification is also the best-shaped place in the system for a loop: it
-arrives with a specific claim to test, so it converges in a few turns.
-An agent told to "find bugs" has no natural stopping point.
+Design note: docs/30_Design_Notes.md#src-judge-investigate
 """
 
 from __future__ import annotations
@@ -47,7 +23,7 @@ from src.judge.verify import (
     judge_enabled,
 )
 from src.review.findings import SEVERITY_HIGH, Finding
-from src.review.provider import InvalidResponse, LLMError, LLMProvider
+from src.llm.provider import InvalidResponse, LLMError, LLMProvider
 
 logger = logging.getLogger(__name__)
 

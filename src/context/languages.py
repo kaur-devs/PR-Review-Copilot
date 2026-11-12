@@ -1,23 +1,6 @@
 """What the rest of the code needs to know about a programming language.
 
-Everything that differs between languages lives behind one object, so adding
-a language is adding an instance rather than editing six files. The six
-things that actually differ:
-
-    the grammar            tree-sitter needs a different parser per language
-    what a definition is   function_definition here, function_declaration there
-    four queries           written against that grammar's node names
-    import resolution      how a module name maps to a file path
-    import node types      which parents mean "this is an import, not a use"
-    validity               how to tell whether source is syntactically whole
-
-A language is only registered once all six exist. A half-ported language is
-worse than none, because the review looks identical while being blinder: no
-symbols, no callers, and no way for the reader to tell.
-
-Every language's IMPORTS query must use the same capture names - module,
-imported, alias and module_only - because analyse_imports in references.py
-reads captures by name and is deliberately language-agnostic.
+Design note: docs/30_Design_Notes.md#src-context-languages
 """
 
 from __future__ import annotations
@@ -168,12 +151,8 @@ PYTHON = PythonSupport(
 )
 
 
-# ---------------------------------------------------------------------------
-# JavaScript, TypeScript and their JSX variants
-# ---------------------------------------------------------------------------
-#
-# Three grammars, one set of rules. They differ enough that tree-sitter ships
-# them separately, and identically enough that everything below is shared.
+# JavaScript, TypeScript and JSX: three tree-sitter grammars, one set of
+# queries, because they differ only where this file does not look.
 
 JS_CALLS = "(call_expression function: (identifier) @name) @call"
 
@@ -186,12 +165,9 @@ JS_ATTRIBUTE_CALLS = """
 
 JS_IDENTIFIERS = "(identifier) @name"
 
-# The capture names are fixed by the contract at the top of this file:
-# analyse_imports reads them by name and knows nothing about any language.
-#
-# The clause comes before the source in the tree, and a query has to follow
-# document order. The !alias in the first pattern stops it also matching an
-# aliased import, which would otherwise give two answers for one specifier.
+# Capture names are the contract: analyse_imports reads them and knows no
+# language. Patterns follow document order (clause before source), and !alias
+# stops an aliased import matching twice.
 JS_IMPORTS = """
 (import_statement
   (import_clause (named_imports (import_specifier !alias name: (identifier) @imported)))

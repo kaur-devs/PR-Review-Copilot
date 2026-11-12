@@ -1,23 +1,6 @@
 """Proving to GitHub that we are who we say we are.
 
-This happens in two steps, and understanding why there are two is worth a
-minute.
-
-Step one. Our App has a private key, which only we hold. We use it to sign a
-short note saying "I am App number 5039285", valid for a few minutes. That
-note is called a JSON Web Token, or JWT. Anyone can read it, but only someone
-with our private key could have produced it.
-
-That note proves we are the App. It does not let us read anybody's code.
-
-Step two. We hand the note to GitHub and ask for a token for one particular
-installation. GitHub checks the note, checks that installation really exists,
-and gives back a token that works for one hour and can only touch the
-repositories that installation was given.
-
-Why bother with two steps? Because the second token is narrow and short-lived.
-If it leaks, it expires within the hour and only ever reached one account. Our
-private key, which never leaves this machine, stays safe.
+Design note: docs/30_Design_Notes.md#src-github-auth
 """
 
 from __future__ import annotations

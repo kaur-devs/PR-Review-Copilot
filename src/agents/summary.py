@@ -1,17 +1,6 @@
 """The comment that orients a human reviewer.
 
-A reviewer opening a pull request today sees a handful of inline
-comments and nothing else: no sense of what the change does, where the
-risk sits, or what was looked at. Both reference designs rank this a
-launch requirement, and it is the one feature of theirs this project
-did not have.
-
-Deliberately not an agent. The summary describes a change we are already
-holding in full, so there is nothing to look up; a tool loop here would
-spend turns confirming what is already in the prompt. One call.
-
-It is also the only stage allowed to say something when nothing was
-found. Silence reads as a broken bot.
+Design note: docs/30_Design_Notes.md#src-agents-summary
 """
 
 from __future__ import annotations
@@ -23,7 +12,7 @@ from src.agents.triage import risk_notes
 from src.classification.kinds import Classification
 from src.diff.parse import FileDiff
 from src.review.findings import Finding
-from src.review.provider import InvalidResponse, LLMError, LLMProvider
+from src.llm.provider import InvalidResponse, LLMError, LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -177,15 +166,4 @@ def _render_answer(answer: object, findings: list[Finding], skipped: dict) -> st
     return render(what, risks, findings, skipped)
 
 
-async def summarise_from_text(
-    answer_text: str, findings: list[Finding], skipped: dict[str, str]
-) -> str:
-    """Same rendering, for an answer that arrived as prose rather than JSON."""
-    try:
-        return _render_answer(read_json_object(answer_text), findings, skipped)
-    except InvalidResponse as error:
-        logger.warning("unreadable summary: %s", error)
-        return ""
-
-
-__all__ = ["build_user_prompt", "render", "summarise", "summarise_from_text"]
+__all__ = ["build_user_prompt", "render", "summarise"]

@@ -13,7 +13,7 @@ from src.classification.kinds import (
 from src.classification.prompts import SYSTEM, build_user_prompt, split_into_requests
 from src.context.symbols import Symbol
 from src.diff.parse import FileDiff
-from src.review.provider import LLMError, LLMProvider
+from src.llm.provider import LLMError, LLMProvider
 
 logger = logging.getLogger(__name__)
 

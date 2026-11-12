@@ -1,17 +1,6 @@
 """Two reviewers, looking for different things, at the same time.
 
-Each one is an agent loop over the shared toolbox with its own narrow
-prompt. They are independent, so they run concurrently and their
-findings are concatenated — the thing LangGraph would call a reducer,
-which at two agents is a list join.
-
-Both start from the pre-computed context rather than cold. That is worth
-more than it looks. Turn one costs more because the diff and the
-reference table are already in it, but the loop converges in three or
-four turns instead of eight, and the quadratic growth of a conversation
-means one larger prompt paid once beats four more turns that each resend
-everything. It also keeps the calibrated confidence scores in play
-rather than replacing them with an agent's assertion.
+Design note: docs/30_Design_Notes.md#src-agents-specialists
 """
 
 from __future__ import annotations
@@ -31,7 +20,7 @@ from src.diff.parse import FileDiff
 from src.review.findings import Finding
 from src.review.generate import read_finding
 from src.review.prompts import build_user_prompt
-from src.review.provider import InvalidResponse, LLMProvider
+from src.llm.provider import InvalidResponse, LLMProvider
 
 logger = logging.getLogger(__name__)
 

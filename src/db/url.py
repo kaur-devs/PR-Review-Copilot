@@ -1,42 +1,16 @@
-"""Fixing up a database connection string so our driver understands it.
-
-Hosted database providers such as Neon give you a connection string like:
-
-    postgresql://user:pass@host/dbname?sslmode=require&channel_binding=require
-
-That is written for a different Postgres library than the one we use. Ours is
-called asyncpg, and it does not understand "sslmode" or "channel_binding". If
-you paste the string in unchanged, the connection fails with a confusing error
-about unexpected arguments.
-
-Rather than making every person who deploys this remember to hand-edit the
-string, we fix it here once.
-"""
+"""Making a hosted provider's connection string usable by asyncpg."""
 
 from __future__ import annotations
 
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-# Settings other Postgres libraries understand but asyncpg does not.
+# Neon and friends put these in the URL; asyncpg rejects them as unexpected
+# arguments, with an error that does not say which one is to blame.
 SETTINGS_ASYNCPG_DOES_NOT_KNOW = {"sslmode", "channel_binding"}
 
 
 def normalise_database_url(url: str) -> tuple[str, dict[str, object]]:
-    """Return a usable connection string plus any extra connection settings.
-
-    Three fixes happen here:
-
-    1. "postgresql://" tells SQLAlchemy to use the old, blocking driver. We
-       change it to "postgresql+asyncpg://" so it uses the async one.
-
-    2. "sslmode=require" is removed from the string and passed separately as
-       a setting asyncpg does understand.
-
-    3. If the host name contains "-pooler", we are connecting through a
-       connection pooler. A pooler can send our next query to a different
-       server, so anything the driver remembered about the last one is no
-       longer valid. Turning off its memory of prepared queries avoids that.
-    """
+    """Return a connection string for the async driver, plus its settings."""
     parts = urlsplit(url)
     settings = dict(parse_qsl(parts.query))
     connect_args: dict[str, object] = {}
@@ -48,6 +22,8 @@ def normalise_database_url(url: str) -> tuple[str, dict[str, object]]:
     if settings.get("sslmode"):
         connect_args["ssl"] = "require"
 
+    # Through a pooler the next query may land on a different server, so
+    # anything the driver cached about the last one is wrong.
     if "-pooler" in (parts.hostname or ""):
         connect_args["statement_cache_size"] = 0
 
