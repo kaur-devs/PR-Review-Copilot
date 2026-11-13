@@ -38,16 +38,13 @@ class ReviewState(TypedDict, total=False):
     diffs: list[FileDiff]
     context: ContextBundle
     already_said: list[SaidBefore]
-    skipped: dict[str, str]
+    skipped_files: dict[str, str]
 
     # Decided by triage.
     classifications: dict[str, Any]
     wake: list[str]
 
-    # One node writes this: the specialists run concurrently inside it and
-    # their lists are joined there. A reducer here would look harmless and
-    # would double every finding on a resumed run, because the checkpoint
-    # already holds what the node is about to add.
+    # One node writes this; a reducer would double it on a resumed run.
     candidates: list[Finding]
 
     # Narrowed stage by stage.
@@ -214,7 +211,7 @@ async def summary(state: ReviewState, config: RunnableConfig) -> dict:
         state["diffs"],
         state.get("to_post", []),
         state.get("classifications", {}),
-        state.get("skipped", {}),
+        state.get("skipped_files", {}),
     )
 
     trace.section("SUMMARY", "written" if text else "none")

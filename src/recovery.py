@@ -23,10 +23,7 @@ logger = logging.getLogger(__name__)
 
 ERROR_INTERRUPTED = "REVIEW_INTERRUPTED"
 
-# Each resumed review spends model tokens from a budget measured per minute,
-# so they are done one at a time and only a few per start. The rest are found
-# again next time, which is the point of looking at startup rather than
-# keeping a queue.
+# One at a time and only a few: the rest are found again at the next start.
 MAX_RESUMED_PER_START = 5
 
 
@@ -82,8 +79,7 @@ async def recover_interrupted_reviews(
 
     for stuck in found:
         if not stuck.can_retry:
-            # Out of attempts. Mark it failed so the row stops claiming to be
-            # in progress when nothing is working on it.
+            # Out of attempts, so stop the row claiming to be in progress.
             async with get_session_factory()() as session:
                 if await abandon_review(
                     session, stuck.review_id, error_code=ERROR_INTERRUPTED
@@ -99,8 +95,7 @@ async def recover_interrupted_reviews(
             if await _resume_one(stuck, github_client, llm_client):
                 report.resumed.append(stuck.review_id)
         except asyncio.CancelledError:
-            # The service is shutting down. Leaving the review where it is is
-            # correct: it is interrupted again, and the next start finds it.
+            # Shutting down: leave it interrupted and the next start finds it.
             report.left_for_next_time.append(stuck.review_id)
             raise
         except Exception:

@@ -1,66 +1,137 @@
-# Product Requirements Document (PRD)
+# Product Requirements
 
-## Product Goal
-Create an installable AI reviewer that reads a pull request the way a careful senior engineer would, verifies its own findings, and posts them as real, severity-gated GitHub comments.
+## Goal
 
-## Feature Priorities
-| Feature | Priority |
-|---|---|
-| GitHub App installation | Must |
-| Webhook-triggered diff ingestion | Must |
-| Connected-file context retrieval | Must |
-| Task-decomposed review generation | Must |
-| Judge/grounding pass | Must |
-| Confidence + dedup filtering | Must |
-| Severity-gated comment posting | Must |
-| Outcome capture | Must |
-| Evaluation harness | Must |
-| PR-level summary comment | Should |
-| Feedback-driven suppression | Should |
-| Deeper cross-file graph | Could |
-| Autofix suggestions | Won't (v1) |
+An installable GitHub App that reads a pull request the way a careful senior
+engineer would, checks its own findings against the code, and posts the ones
+worth a developer's attention as inline comments.
 
-## User Stories
+## Principles
 
-### US-001
-As an engineering team lead, I want to install the reviewer on my repository so that every future PR gets reviewed automatically.
+- **Grounded before posted.** Every finding is checked against real code by a
+  second model before anyone sees it.
+- **Human in the loop.** It comments. It never blocks a merge or merges
+  anything.
+- **Quiet by default.** Severity-gated. A reviewer that posts everything is
+  one nobody reads.
+- **Measured, not claimed.** Quality statements come from the evaluation
+  harness, and name the model that produced them.
+- **Honest about what it did not do.** A review that could not read the
+  repository says so rather than quietly reviewing less.
 
-**Acceptance criteria**
+## Features
+
+| Feature | Priority | Status |
+|---|---|---|
+| GitHub App installation | Must | built |
+| Webhook-triggered diff ingestion | Must | built |
+| Connected-file context | Must | built |
+| Targeted review generation | Must | built |
+| Verification before posting | Must | built |
+| Severity and confidence gates | Must | built |
+| Repeat suppression across commits | Must | built |
+| Severity-gated inline comments | Must | built |
+| Pull-request summary comment | Must | built |
+| Outcome capture | Must | built |
+| Evaluation harness | Must | built |
+| Suggested replacement lines | Should | built |
+| Multi-language review | Should | built, not evaluated |
+| Deployment | Must | **not built** |
+| Feedback-driven suppression | Should | **not built** |
+| Per-repository configuration | Should | **not built** |
+| Deeper cross-file graph | Could | not built |
+| Autonomous fixing or merging | Won't | out of scope by principle |
+
+Suggested replacement lines were originally out of scope. They are in because
+a one-line fix behind GitHub's Apply button is cheap to offer and easy to
+refuse: the suggestion is applied to the real file and must compile, and a
+refused suggestion never hides the comment carrying it.
+
+## User stories
+
+### US-001 — Install it
+As a team lead, I install the reviewer on a repository so every future pull
+request is reviewed automatically.
+
 - Installation completes through GitHub's App flow.
-- The app requests only PR read/write and contents-read permissions.
+- It requests pull requests read/write and contents read, nothing else.
 
-### US-002
-As a developer, I want the reviewer to understand code connected to my change, not just the diff, so that it catches cross-file breakage.
+**Built.**
 
-**Acceptance criteria**
-- Findings can reference a file that wasn't itself changed in the PR.
+### US-002 — See past the diff
+As a developer, I want findings about code my change breaks, not only lines I
+touched.
 
-### US-003
-As a developer, I want the reviewer to double-check itself before commenting so that I'm not shown false alarms.
+- A finding may reference a file the pull request did not change.
+- The comment sits on the changed line that caused the break and names the
+  other end.
 
-**Acceptance criteria**
-- A finding that fails the judge pass never reaches the PR.
+**Built.** The reviewer reads the repository at the commit under review and
+can grep, open files and follow references while deciding.
 
-### US-004
-As a developer, I want only important issues shown by default so the PR stays readable.
+### US-003 — Not be shown false alarms
+As a developer, I want the reviewer to check itself before commenting.
 
-**Acceptance criteria**
-- Low-severity findings are stored but not posted unless explicitly requested.
+- A finding the verifier contradicts never reaches the pull request.
+- A finding it cannot check is kept at reduced confidence, not deleted and
+  not trusted.
 
-### US-005
-As a builder, I want a measured evaluation report so I can state a credible recall/false-positive number.
+**Built.**
 
-### US-006
-As a team, I want the bot to stop repeating a finding category we keep dismissing (v2).
+### US-004 — Only important issues
+As a developer, I want the pull request to stay readable.
 
-## Product States
-`INSTALLED → WEBHOOK_RECEIVED → PROCESSING → REVIEW_POSTED → OUTCOME_RECORDED`
+- Low severity and low confidence are stored but not posted.
+- The summary says how many were held back, so nothing is hidden silently.
 
-Failure state: `PROCESSING_FAILED`.
+**Built**, except the part that lets a repository ask for more: there is no
+configuration file, so the thresholds are the same everywhere.
 
-## Product Principles
-- Grounded before posted — every finding is verified against real code before a human sees it.
-- Human-in-the-loop — the tool comments, it does not block or auto-merge.
-- Transparent, not novel — built from documented competitor techniques, cited as such.
-- Quiet by default — severity-gating over completeness.
-- Measured, not claimed — every quality statement is backed by the eval harness.
+### US-005 — A credible number
+As a builder, I want a measured recall and false-positive rate I can defend.
+
+**Partly built.** The harness, the scoring and the ablations exist. Four
+labelled cases is too few to separate a real improvement from noise, and all
+four are Python.
+
+### US-006 — Stop repeating what we dismiss
+As a team, I want the reviewer to fall silent on a category we keep
+dismissing.
+
+**Not built.** `outcomes` records what developers did and carries an index on
+`(repo_id, category)` for exactly this query. Nothing reads it yet, and
+nothing will mean anything until the App has real users dismissing real
+comments.
+
+## What a review produces
+
+One GitHub review containing:
+
+- an opening comment: what changed, what is worth a look, how many comments
+  follow and how many were held back
+- one inline comment per finding, at a changed line, carrying severity,
+  category, the problem, the reasoning and the files that were read
+- a suggested replacement line where one is safe
+
+## States
+
+```
+installed ──> delivery received ──> claimed ──> reviewing ──> posted
+                     │                 │            │
+                     ├──> ignored      └──> superseded
+                     └──> duplicate                 ├──> skipped
+                                                    ├──> nothing to say
+                                                    ├──> all said before
+                                                    └──> failed
+```
+
+`all said before` is deliberately distinct from `nothing to say`: a review
+that found the same three problems again is not a review that found nothing.
+
+## Out of scope
+
+- Merging, blocking a merge, or approving.
+- Executing any code from a pull request.
+- Reviewing anything but the diff and the repository at that commit.
+- Replacing a human reviewer. It is a second pair of eyes that never gets
+  tired, not a senior engineer.

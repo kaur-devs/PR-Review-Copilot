@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-# Neon and friends put these in the URL; asyncpg rejects them as unexpected
-# arguments, with an error that does not say which one is to blame.
+# Hosted providers put these in the URL; asyncpg rejects them as unexpected.
 SETTINGS_ASYNCPG_DOES_NOT_KNOW = {"sslmode", "channel_binding"}
 
 
@@ -22,8 +21,7 @@ def normalise_database_url(url: str) -> tuple[str, dict[str, object]]:
     if settings.get("sslmode"):
         connect_args["ssl"] = "require"
 
-    # Through a pooler the next query may land on a different server, so
-    # anything the driver cached about the last one is wrong.
+    # Through a pooler the next query may land elsewhere, so nothing is cached.
     if "-pooler" in (parts.hostname or ""):
         connect_args["statement_cache_size"] = 0
 

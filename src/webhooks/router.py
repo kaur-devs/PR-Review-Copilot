@@ -69,15 +69,12 @@ async def receive_github_webhook(
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ) -> JSONResponse:
-    # Read the exact bytes GitHub sent. Do not use request.json() here: that
-    # gives us a Python dictionary, and turning it back into text produces
-    # different bytes, so the signature check would always fail.
+    # The exact bytes: re-encoding parsed JSON breaks the signature.
     raw_body = await request.body()
 
     signature = request.headers.get(SIGNATURE_HEADER)
     if not is_valid_signature(raw_body, signature, get_settings().webhook_secret):
-        # Vague on purpose. Anyone can send us a message, and someone trying
-        # to forge one should learn nothing about why it failed.
+        # Vague on purpose: a forger should learn nothing from the reply.
         logger.warning("rejected a delivery with an invalid signature")
         return rejected(
             401, "WEBHOOK_SIGNATURE_INVALID", "The request could not be verified."
@@ -97,12 +94,10 @@ async def receive_github_webhook(
             400, "WEBHOOK_PAYLOAD_MALFORMED", "The request body is not valid JSON."
         )
 
-    # Decided before anything is written, so the row we store already knows
-    # the outcome.
+    # Decided first, so the row we store already knows the outcome.
     action = payload.get("action")
 
-    # A developer resolved or reopened one of our comment threads. Cheap to
-    # handle, and the only way we learn whether a comment was useful.
+    # The only way we learn whether a comment was useful.
     if is_thread_event(event, action):
         return await _record_outcome(session, delivery_id, event, action, payload)
 
@@ -133,29 +128,24 @@ async def receive_github_webhook(
         logger.info("ignoring %s/%s (delivery %s)", event, action, delivery_id)
         return accepted("ignored", event=event, action=action)
 
-    # A different message may have claimed this commit already, for example
-    # a pull request reopened with no new code pushed.
+    # Another message may hold this commit, e.g. a reopen with no new code.
     repo_id = await ensure_repo(session, pull_request)
     review_id = await claim_review(session, repo_id, pull_request)
 
     if review_id is None:
-        # This message was worth acting on, but there was nothing left to do.
-        # Correct what we wrote a moment ago, so the record is honest.
+        # Worth acting on but nothing left to do; correct the row we just wrote.
         await update_delivery(session, delivery_row_id, outcome="duplicate")
         logger.info("commit %s is already being reviewed", pull_request.head_sha[:7])
         return accepted("duplicate", reason="commit already claimed")
 
     await update_delivery(session, delivery_row_id, review_id=review_id)
 
-    # This commit is the one that matters now. Anything still queued or
-    # running for an older commit on the same pull request is retired, so
-    # it neither posts stale comments nor competes for the token budget.
+    # Retire older commits still running: stale comments and a shared budget.
     await supersede_earlier_reviews(
         session, repo_id, pull_request.pr_number, keep=review_id
     )
 
-    # Runs after the reply has been sent, which is what keeps us inside
-    # GitHub's ten second limit.
+    # After the reply, which is what keeps us inside GitHub's ten seconds.
     background_tasks.add_task(process_pull_request, pull_request, review_id)
 
     logger.info(

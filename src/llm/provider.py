@@ -40,7 +40,9 @@ from src.llm.errors import (
     LLMError,
     LLMNotConfigured,
     RateLimited,
+    BadToolArguments,
     UnknownTool,
+    _bad_tool_arguments,
     _unknown_tool,
 )
 from src.llm.messages import (
@@ -148,16 +150,22 @@ class LLMProvider:
         *,
         temperature: float = 0.0,
         max_tokens: int | None = None,
+        json_mode: bool = False,
     ) -> Completion:
         """One turn of a tool-using conversation.
 
         The whole history goes up every time, so the caller owns the message
-        list and appends to it between turns. JSON mode is deliberately not
-        offered: providers disagree about whether it can be combined with
-        tools, and the loop can read the final answer with Completion.as_json.
+        list and appends to it between turns.
+
+        `json_mode` stays off while tools are offered: providers disagree
+        about whether the two can be combined, and a refused request
+        mid-loop costs the whole run. It is worth asking for on a turn that
+        offers no tools, because a reply that must be a JSON object cannot
+        be a tool call — which is the one thing gpt-oss does when told it
+        has no lookups left.
         """
         payload = self._payload(
-            messages, json_mode=False, temperature=temperature,
+            messages, json_mode=json_mode, temperature=temperature,
             max_tokens=max_tokens, tools=tools,
         )
         return await self._send(payload, _estimate_tokens(messages, tools))
@@ -187,13 +195,14 @@ class LLMProvider:
                 if response.status_code == 200:
                     return self._read(response, attempt)
 
-                unknown = (
-                    _unknown_tool(response.text)
-                    if response.status_code == 400
-                    else None
-                )
-                if unknown is not None:
-                    raise unknown
+                if response.status_code == 400:
+                    # Both are rejected before our toolbox runs, so neither
+                    # reaches the ToolFailure path the loop usually uses.
+                    rejected = _unknown_tool(response.text) or _bad_tool_arguments(
+                        response.text
+                    )
+                    if rejected is not None:
+                        raise rejected
 
                 if (
                     response.status_code == 429
@@ -211,7 +220,6 @@ class LLMProvider:
                 if response.status_code not in RETRYABLE_STATUS:
                     raise last_error
 
-                # The provider knows exactly how long the window has left.
                 # Guessing is how a retry lands inside the same closed window.
                 told_to_wait = parse_duration(response.headers.get("retry-after"))
                 wait = min(
@@ -241,8 +249,7 @@ class LLMProvider:
         except (KeyError, IndexError) as error:
             raise InvalidResponse(f"unexpected response shape: {error}")
 
-        # content is null whenever the model asks for a tool, so an empty
-        # string here is only an error if nothing was asked for either.
+        # content is null whenever a tool was asked for, which is not an error.
         text = message.get("content") or ""
         tool_calls = _read_tool_calls(message)
         finish_reason = choice.get("finish_reason") or FINISH_STOP

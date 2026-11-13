@@ -23,9 +23,7 @@ def get_engine():
     """The one engine for this process. lru_cache means it is built once."""
     url, connect_args = normalise_database_url(get_settings().database_url)
 
-    # No pool: the cloud database already pools on its side, and a kept-open
-    # connection belongs to the event loop that opened it, which fails
-    # confusingly when something else picks it up.
+    # No pool: a kept-open connection belongs to the loop that opened it.
     return create_async_engine(url, connect_args=connect_args, poolclass=NullPool)
 
 

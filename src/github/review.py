@@ -34,9 +34,7 @@ def build_comment_body(finding: Finding) -> str:
     if finding.rationale and finding.rationale != finding.message:
         parts.extend(["", finding.rationale])
 
-    # Placed after the explanation and before the surrounding context, so
-    # the reader meets the problem, then the reason, then the fix. GitHub turns
-    # this block into a diff with a "Commit suggestion" button.
+    # Problem, then reason, then fix. GitHub renders this block as a diff.
     if finding.suggestion:
         parts.extend(["", "```suggestion", finding.suggestion, "```"])
 

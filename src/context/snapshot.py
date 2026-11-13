@@ -18,9 +18,7 @@ MAX_ARCHIVE_BYTES = 50 * 1024 * 1024
 MAX_FILE_BYTES = 1024 * 1024
 DOWNLOAD_TIMEOUT_SECONDS = 60.0
 
-# Which files are worth unpacking. Taken from the language registry rather
-# than listed again here: a language we cannot parse is one we cannot use,
-# and a snapshot missing the file is indistinguishable from a deleted one.
+# From the language registry, so there is no second list to remember.
 SOURCE_SUFFIXES = REVIEWABLE_SUFFIXES
 
 IGNORED_DIRECTORIES = frozenset({

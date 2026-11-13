@@ -11,9 +11,7 @@ from dataclasses import dataclass
 
 PULL_REQUEST_EVENT = "pull_request"
 
-# The four actions that mean new code exists. "synchronize" is GitHub's name
-# for more commits being pushed. Everything else, such as labelling or
-# assigning, changes no code.
+# The four that mean new code exists; "synchronize" is a push.
 ACTIONS_WE_REVIEW = frozenset(
     {"opened", "synchronize", "reopened", "ready_for_review"}
 )
@@ -43,8 +41,7 @@ class PullRequestEvent:
     # Needed to get permission to read the code.
     installation_id: int
 
-    # GitHub's numeric id for the repository. We key on this rather than the
-    # name, because a repository can be renamed and its id cannot change.
+    # Keyed on the id, not the name: a repository can be renamed.
     repo_id: int
 
     repo_full_name: str

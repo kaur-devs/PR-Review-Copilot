@@ -44,9 +44,7 @@ GENERATED_SUFFIXES = (
     ".lock",
 )
 
-# Read from src/context/languages.py so registering a language there is the
-# only step. A file we cannot parse reaches the model with no symbols and no
-# connected code, so it is skipped rather than reviewed badly.
+# From the language registry, so registering a language there is the only step.
 
 
 @dataclass(frozen=True)
@@ -74,8 +72,7 @@ def decide(changed: ChangedFile) -> SkipDecision:
     if any(path.endswith(suffix) for suffix in GENERATED_SUFFIXES):
         return SkipDecision(True, "it looks machine-generated")
 
-    # Checked after the rules above so a vendored JavaScript file is reported
-    # as vendored, which is the more useful reason of the two.
+    # After the rules above, so a vendored JS file is reported as vendored.
     if Path(path).suffix not in REVIEWABLE_SUFFIXES:
         return SkipDecision(True, "we cannot parse this language")
 

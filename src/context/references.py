@@ -35,8 +35,7 @@ class ImportFacts:
     module_imported: bool = False
     local_name: str | None = None
 
-    # What the whole module was called locally, for "import * as x" and
-    # "import a.b as x". Without it, x.thing() cannot be tied to the import.
+    # Without it, x.thing() cannot be tied back to "import * as x".
     module_alias: str | None = None
 
 

@@ -5,6 +5,7 @@ Design note: docs/30_Design_Notes.md#src-judge-investigate
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import defaultdict
 from dataclasses import replace
@@ -27,11 +28,12 @@ from src.llm.provider import InvalidResponse, LLMError, LLMProvider
 
 logger = logging.getLogger(__name__)
 
-# Below this, the generator was already unsure, so the claim is worth
-# checking properly. Above it, a confident medium-severity finding gets
-# the cheap single call. This threshold is the main cost dial in the
-# pipeline: raising it sends more work to the expensive path.
+# The main cost dial: raising it sends more work to the expensive path.
 INVESTIGATE_BELOW_CONFIDENCE = 0.75
+
+# Tokens per minute is still the limit, so the verifier fans out no wider
+# than the specialists do.
+MAX_CONCURRENT_FILES = 4
 
 SYSTEM = """You are checking whether a code review finding is real. You have
 tools that read the repository at the commit under review.
@@ -181,16 +183,30 @@ async def investigate(
     for finding in findings:
         by_file[finding.file].append(finding)
 
-    for path, group in by_file.items():
-        try:
-            _, run, verdicts = await _investigate_one_file(
+    # One loop per file, several at a time. Sequential cost nothing when
+    # findings clustered in two or three files; once the specialists run
+    # per file the findings spread across as many, and a serial verifier
+    # adds a loop's latency for every one of them.
+    limit = asyncio.Semaphore(MAX_CONCURRENT_FILES)
+
+    async def one(path: str, group: list[Finding]):
+        async with limit:
+            return await _investigate_one_file(
                 model, toolbox, group, diffs_by_file.get(path)
             )
-        except LLMError as error:
-            logger.warning("the verifier failed on %s, keeping them: %s", path, error)
+
+    groups = list(by_file.items())
+    outcomes = await asyncio.gather(
+        *(one(path, group) for path, group in groups), return_exceptions=True
+    )
+
+    for (path, group), outcome in zip(groups, outcomes):
+        if isinstance(outcome, BaseException):
+            logger.warning("the verifier failed on %s, keeping them: %s", path, outcome)
             result.kept.extend(group)
             continue
 
+        _, run, verdicts = outcome
         runs[path] = run
 
         for index, finding in enumerate(group):

@@ -241,9 +241,7 @@ async def test_a_finding_the_judge_supports_is_posted():
     assert status == "posted"
 
 
-# ---------------------------------------------------------------------------
-# Not saying the same thing twice
-# ---------------------------------------------------------------------------
+# --- Not saying the same thing twice ---
 
 AFTER_A_PUSH = replace(EVENT, head_sha="c" * 40, delivery_id="d-2")
 
@@ -310,9 +308,7 @@ async def test_a_genuinely_new_finding_still_gets_posted():
 
 
 async def test_something_held_back_by_the_gate_is_not_a_repeat():
-    # Stored but never posted the first time, because confidence was too low.
-    # Nobody saw it, so saying it now is new rather than a repeat. This is why
-    # repeats are dropped after the gate rather than before it.
+    # Never posted, so nobody saw it: saying it now is new, not a repeat.
     first_id, _ = await run_pipeline(
         FILES, classifications=LABELS, findings=[model_finding(confidence=0.3)]
     )
@@ -413,8 +409,7 @@ async def test_a_review_superseded_while_it_ran_posts_nothing():
     review_id = await make_review()
 
     async def newer_commit_arrives(event, **kwargs):
-        # repo_id here is ours, not GitHub's: reviews point at the repos
-        # table, and ensure_repo is what maps one to the other.
+        # Ours, not GitHub's: ensure_repo maps one to the other.
         async with get_session_factory()() as session:
             our_repo_id = await session.scalar(
                 select(Review.repo_id).where(Review.id == review_id)

@@ -7,7 +7,7 @@ from src.classification.kinds import Classification
 from src.common import trace
 from src.context.bundle import ContextBundle
 from src.diff.parse import FileDiff
-from src.review.findings import CATEGORIES, SEVERITIES, Finding
+from src.review.findings import SEVERITIES, Finding, normalise_category
 from src.review.prompts import build_system_prompt, build_user_prompt
 from src.llm.provider import LLMError, LLMProvider
 
@@ -17,8 +17,7 @@ MAX_FINDINGS_PER_REQUEST = 20
 MAX_MESSAGE_LENGTH = 300
 MAX_RATIONALE_LENGTH = 600
 
-# A suggestion replaces one line. Anything longer than this is the model
-# rewriting a function, which is not what the Apply button is for.
+# Longer than this is the model rewriting a function, not fixing a line.
 MAX_SUGGESTION_LENGTH = 400
 SKIP_KINDS = frozenset({"docs"})
 
@@ -145,16 +144,18 @@ def read_finding(
     if severity not in SEVERITIES:
         return None, f"unknown severity {severity!r}"
 
-    category = entry.get("category")
-    if category not in CATEGORIES:
-        return None, f"unknown category {category!r}"
+    category, translated = normalise_category(entry.get("category"))
+    if translated:
+        logger.info(
+            "category %r is not one of ours, filing it under %r",
+            entry.get("category"), category,
+        )
 
     message = str(entry.get("message", "")).strip()
     if not message:
         return None, "empty message"
 
-    # Say where it actually breaks. The comment sits on the cause, so
-    # without this the reader is told something is wrong and not where.
+    # The comment sits on the cause, so name where it actually breaks.
     if affects:
         message = f"{message} (breaks {affects})"
 

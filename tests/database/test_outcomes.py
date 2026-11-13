@@ -64,9 +64,7 @@ async def outcomes_for(finding_id):
         )).all()
 
 
-# ---------------------------------------------------------------------------
-# Recognising the event
-# ---------------------------------------------------------------------------
+# --- Recognising the event ---
 
 def test_resolved_and_unresolved_threads_are_acted_on():
     assert is_thread_event("pull_request_review_thread", "resolved")
@@ -111,9 +109,7 @@ def test_comments_without_numeric_ids_are_ignored():
     assert read_thread_event("d", payload) is None
 
 
-# ---------------------------------------------------------------------------
-# Recording what happened
-# ---------------------------------------------------------------------------
+# --- Recording what happened ---
 
 async def test_resolving_our_comment_records_it_as_accepted():
     finding_id = await seed_posted_finding(7001)
@@ -193,9 +189,7 @@ async def test_a_thread_mixing_our_comment_with_replies_still_records_ours():
     assert await outcomes_for(finding_id) == [("accepted", "correctness")]
 
 
-# ---------------------------------------------------------------------------
-# Through the endpoint
-# ---------------------------------------------------------------------------
+# --- Through the endpoint ---
 
 def post(client, payload, event="pull_request_review_thread", delivery="t-1"):
     body = json.dumps(payload).encode()

@@ -1,95 +1,177 @@
-# Database / Data Design
+# Database Design
 
-## Core Tables
+Six tables in Postgres. Every column below exists in `src/db/models.py`;
+migrations are in `alembic/versions/`.
+
+## Tables
 
 ### installations
-- `id`
-- `github_installation_id`
-- `account_login`
-- `installed_at`
+
+Someone who installed the App on their account.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | integer | primary key |
+| `github_installation_id` | bigint | **unique** — GitHub's id, what tokens are issued against |
+| `account_login` | varchar(255) | |
+| `installed_at` | timestamptz | |
 
 ### repos
-- `id`
-- `installation_id`
-- `full_name`
-- `default_branch`
-- `created_at`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | integer | primary key |
+| `installation_id` | integer | → `installations.id` |
+| `github_repo_id` | bigint | **unique** — matched on this, never the name |
+| `full_name` | varchar(512) | `owner/repo`, refreshed on every event |
+| `default_branch` | varchar(255) | |
+| `created_at` | timestamptz | |
+
+A repository can be renamed at any time; its id cannot change. Everything
+keys on `github_repo_id`, and `full_name` is treated as a label.
 
 ### webhook_events
-One row per authenticated delivery, including duplicates and ignored actions, so every delivery is accounted for. Requests that fail signature verification are not stored; they are logged only, so unauthenticated input never reaches the database. The full payload is not stored — only the fields that identify the event (see Security Design).
-- `id`
-- `delivery_id` — the `X-GitHub-Delivery` GUID, **unique**
-- `event` — the `X-GitHub-Event` value, e.g. `pull_request`
-- `action` — e.g. `opened`, `synchronize`
-- `github_repo_id`
-- `pr_number`
-- `head_sha`
-- `outcome` — `accepted` / `duplicate` / `ignored`
-- `review_id` — nullable; the review this delivery created or was de-duplicated against
-- `received_at`
+
+One row per authenticated delivery — including duplicates and ignored
+actions — so every delivery is accounted for. A request that fails signature
+verification is logged and never stored, so unauthenticated input does not
+reach the database. The payload is not kept, only the fields that identify
+the event.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | integer | primary key |
+| `delivery_id` | varchar(64) | **unique** — the `X-GitHub-Delivery` GUID |
+| `event` | varchar(64) | `pull_request`, `pull_request_review_thread` |
+| `action` | varchar(64) | `opened`, `synchronize`, … |
+| `github_repo_id` | bigint | nullable |
+| `pr_number` | integer | nullable |
+| `head_sha` | varchar(40) | nullable |
+| `outcome` | varchar(16) | `accepted` / `duplicate` / `ignored`, checked |
+| `review_id` | integer | nullable → `reviews.id` |
+| `received_at` | timestamptz | |
 
 ### reviews
-One row per unit of review work: one commit on one PR.
-- `id`
-- `repo_id`
-- `pr_number`
-- `head_sha` — the commit being reviewed
-- `status` — see the review state machine in the LLD
-- `attempts` — pipeline runs started; caps automatic recovery
-- `error_code` — nullable; stable internal code when `status = failed`
-- `github_review_id` — nullable; set once GitHub accepts the review
-- `created_at`
-- `updated_at` — refreshed on every status change; used to detect stuck reviews
 
-**Constraint:** unique (`repo_id`, `pr_number`, `head_sha`). This is the review-level idempotency key.
+One row per unit of work: one commit on one pull request.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | integer | primary key |
+| `repo_id` | integer | → `repos.id` |
+| `pr_number` | integer | |
+| `head_sha` | varchar(40) | the commit under review |
+| `status` | varchar(32) | checked against the nine valid statuses |
+| `attempts` | integer | runs started; caps automatic recovery |
+| `error_code` | varchar(64) | nullable, set when `status = failed` |
+| `context_status` | varchar(16) | nullable — `ok` / `degraded` / `unavailable` |
+| `github_review_id` | bigint | nullable, set once GitHub accepts |
+| `created_at` | timestamptz | |
+| `updated_at` | timestamptz | refreshed on every change; finds stuck reviews |
+
+**`UNIQUE (repo_id, pr_number, head_sha)`** is the idempotency key. Claiming
+is an insert against it, so two messages about one commit produce one review
+and the loser is told nothing came back.
+
+`context_status` records how good the connected-file context was, so a weak
+review can be explained rather than guessed at afterwards.
 
 ### findings
-- `id`
-- `review_id`
-- `file`
-- `line`
-- `severity`
-- `category`
-- `rationale`
-- `confidence`
-- `posted` (bool)
+
+Every finding is stored, including those the gates hold back, so thresholds
+can be retuned without re-running the reviewer (ADR-010).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | integer | primary key |
+| `review_id` | integer | → `reviews.id` |
+| `file` | varchar(1024) | |
+| `line` | integer | |
+| `severity` | varchar(32) | |
+| `category` | varchar(64) | |
+| `rationale` | text | |
+| `confidence` | float | |
+| `posted` | boolean | |
+| `github_comment_id` | bigint | nullable — how an outcome is matched back |
 
 ### outcomes
-- `id`
-- `finding_id`
-- `repo_id`
-- `category`
-- `outcome` (accepted / rejected / ignored)
-- `recorded_at`
 
-### repo_suppressions
-- `repo_id`
-- `category`
-- `suppressed` (bool)
-- `updated_at`
+What the developer did with a comment. This is how the project measures
+whether it is useful rather than merely finished.
 
-## ER-style Relationships
+| Column | Type | Notes |
+|---|---|---|
+| `id` | integer | primary key |
+| `finding_id` | integer | → `findings.id` |
+| `repo_id` | integer | → `repos.id` |
+| `category` | varchar(64) | copied from the finding, so it can be grouped |
+| `outcome` | varchar(16) | `accepted` / `rejected` / `ignored` |
+| `recorded_at` | timestamptz | |
+
+**`UNIQUE (finding_id)`** — one current outcome per finding. A thread can be
+resolved and reopened, so the row is replaced rather than appended to.
+
+## Relationships
 
 ```mermaid
 erDiagram
     INSTALLATION ||--o{ REPO : has
     REPO ||--o{ REVIEW : receives
-    REVIEW ||--o{ WEBHOOK_EVENT : "triggered by"
+    REVIEW ||--o{ WEBHOOK_EVENT : "recorded against"
     REVIEW ||--o{ FINDING : produces
-    FINDING ||--o| OUTCOME : generates
-    REPO ||--o{ REPO_SUPPRESSION : configures
+    FINDING ||--o| OUTCOME : "answered by"
 ```
 
-## Indexes
-- `repos.github_installation_id`.
-- `reviews.repo_id + created_at`.
-- `webhook_events.delivery_id` (unique).
-- `reviews.repo_id + pr_number + head_sha` (unique).
-- `reviews.status + updated_at` — the stuck-review recovery scan.
-- `findings.review_id`.
-- `outcomes.repo_id + category`.
+## Indexes and constraints
 
-## Data Lifecycle
-Webhook received and recorded → review claimed (or delivery marked duplicate/ignored) → findings generated → filtered → review posted → outcome recorded → *(v2)* suppression rules updated.
+| | Purpose |
+|---|---|
+| `installations.github_installation_id` unique | one row per installation |
+| `repos.github_repo_id` unique | one row per repository |
+| `webhook_events.delivery_id` unique | the same message twice |
+| `uq_reviews_repo_pr_head` | two messages about the same commit |
+| `uq_outcomes_finding` | one current outcome per finding |
+| `ix_repos_installation_id` | repositories for an installation |
+| `ix_reviews_repo_created` | a repository's review history |
+| `ix_reviews_status_updated` | the stuck-review recovery scan |
+| `ix_findings_review_id` | a review's findings |
+| `ix_outcomes_repo_category` | acceptance rate per category, per repository |
+| `ck_reviews_status` | rejects a status nothing understands |
+| `ck_reviews_context_status` | same, for context quality |
+| `ck_webhook_events_outcome` | same, for delivery outcome |
 
-Use public open-source repos for evaluation; no private customer code is required for the student project.
+The check constraints exist so a typo is refused by the database rather than
+stored and discovered later by something that cannot interpret it.
+
+## Lifecycle
+
+```
+delivery recorded ──> commit claimed ──> review runs ──> findings stored
+                            │                                  │
+                      (or duplicate,                      gates decide
+                       ignored, superseded)                     │
+                                                          review posted
+                                                                │
+                                                       comment ids matched
+                                                                │
+                                                        outcome recorded
+```
+
+Findings are stored **before** posting, so a posting failure loses nothing.
+`github_review_id` and `github_comment_id` are set only after GitHub accepts,
+which is what lets an outcome be tied back to the finding that produced it.
+
+## Known gaps
+
+- **The posted message is not reliably stored.** `findings` has `rationale`
+  but no `message` column, and `store_findings` writes
+  `rationale or message`. The sentence a developer actually read cannot
+  always be reconstructed from the database, which weakens the retuning
+  argument that justifies storing held-back findings at all. A `message`
+  column is the fix.
+- **`outcomes` is written but never read.** The acceptance-rate metric and
+  the per-repository suppression it would feed are not built.
+  `ix_outcomes_repo_category` exists for exactly that query.
+- **Development and production share one database.** The test database is
+  separate and wiped on every run, which is why `conftest.py` refuses to
+  start when `TEST_DATABASE_URL` matches `DATABASE_URL`.

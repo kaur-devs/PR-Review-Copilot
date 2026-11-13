@@ -88,7 +88,6 @@ async def review_pull_request_with_agents(
 
     try:
         # One snapshot, held open for as long as the agents are looking.
-        # gather_context used to open its own and throw it away.
         async with open_snapshot(
             event.repo_full_name, event.head_sha, event.installation_id,
             client=github_client,
@@ -109,7 +108,7 @@ async def review_pull_request_with_agents(
                         "diffs": outcome.diffs,
                         "context": outcome.context,
                         "already_said": already_said or [],
-                        "skipped": skipped,
+                        "skipped_files": outcome.skipped_files,
                     },
                     {
                         "configurable": {
@@ -132,8 +131,7 @@ async def review_pull_request_with_agents(
     outcome.summary = final.get("summary", "")
     outcome.held = final.get("held", [])
 
-    # Suggestions last: they read files from GitHub, so a pull request
-    # with no surviving findings makes no network calls at all.
+    # Last, so a pull request with no findings makes no network calls.
     outcome.suggestions = await _settle_suggestions(
         kept, set(), event, github_client
     )
@@ -144,6 +142,12 @@ async def review_pull_request_with_agents(
         f"{outcome.suggestions.offered} offered, "
         f"{len(outcome.suggestions.refused)} refused",
     )
+    # The single-pass pipeline has always printed these; this one lost them
+    # when the two were split, so four refusals in review 20 said nothing
+    # about why a comment arrived with no Apply button.
+    for finding, reason in outcome.suggestions.refused:
+        trace.item(f"refused  {finding.file}:{finding.line}  {reason}")
+        trace.snippet(finding.suggestion or "")
 
     outcome.model_calls = quota.requests - calls_before
     outcome.seconds = time.monotonic() - started

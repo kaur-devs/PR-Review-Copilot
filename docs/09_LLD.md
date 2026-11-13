@@ -1,602 +1,267 @@
 # Low-Level Design
 
-How the service is built, module by module. The high-level shape is in
-[06_HLD.md](06_HLD.md); this document is the level below it — real signatures,
-real types, real constraints.
-
-**Status key used throughout:** `built` means the code exists and is tested.
-`designed` means the interface is agreed but nothing is written yet.
-
----
+How the service is built, package by package. The shape is in
+[06_HLD.md](06_HLD.md); the review stages are in
+[29_Agentic_Architecture.md](29_Agentic_Architecture.md). This is the layer
+below both: what lives where, what may import what, and the rules that keep
+one failure from becoming two.
 
 ## 1. Module map
 
 ```text
 src/
-  main.py            FastAPI application, startup checks, /health
+  main.py            FastAPI application, startup, /health
   config.py          settings, read once and validated at startup
-  pipeline.py        orchestrates one review; takes a PR, never a request
+  recovery.py        picks up reviews interrupted by a restart
 
   webhooks/          receiving events from GitHub
     signature.py       HMAC-SHA256 verification
-    events.py          which events matter, and the fields we keep
+    events.py          which events matter, and the fields kept
     router.py          POST /webhooks/github
+
+  pipeline/          running one review
+    record.py          database and GitHub side; posts the result
+    graph.py           the stages, as a LangGraph state graph
+    agentic.py         opens resources, invokes the graph
+    single_pass.py     the one-call alternative
+    prepare.py         fetch and filter, shared by both
+
+  agents/            the tool loop and what runs inside it
+    loop.py            send, run tools, send again, stop
+    tools.py           read_file, grep, definitions, references, tests
+    prompts.py         the two specialist prompts
+    specialists.py     runs them concurrently, reads their findings
+    triage.py          which specialists to wake; no model call
+    summary.py         the opening comment
+    answers.py         pulling JSON out of a reply
+    measure.py         turn and token measurement harness
+
+  llm/               talking to a model
+    provider.py        the HTTP client
+    budget.py          per-model token budgets, reserved before sending
+    errors.py          what can go wrong, by what the caller does about it
+    messages.py        tool calls and completions, on the wire
+    settings.py        where to send, how hard to try
 
   github/            talking to GitHub
     auth.py            App JWT, then installation token
     client.py          requests, pagination, headers
+    review.py          building and posting one review
 
   diff/              working out what changed
     files.py           fetch the changed file list
     skip.py            which files are worth reviewing
     parse.py           patch text into hunks and line numbers
 
-  db/                storage
-    models.py          seven tables
-    queries.py         reads and writes
-    session.py         engine and sessions
-    url.py             connection string translation
+  context/           connected-file context
+    snapshot.py        the repository at the reviewed commit
+    symbols.py         what changed, as definitions
+    references.py      who uses them, with confidence
+    languages.py       tree-sitter queries per language
+    bundle.py          ranked, budgeted context
+    gather.py          the entry point
 
-  context/           connected-file context          (designed)
-  classification/    labelling the change type       (designed)
-  review/            generating findings             (designed)
-  judge/             verifying findings              (designed)
-  filter/            confidence and deduplication    (designed)
-  outcomes/          recording developer response    (designed)
-  common/            shared helpers                  (empty)
+  classification/    labelling each changed file
+  judge/             verifying findings, cheaply or by looking
+  filter/            gates, repeats, suggestions
+  review/            findings, prompts, generation for the single pass
+  outcomes/          recording what the developer did
+  db/                models, queries, session, url
+  evaluation/        replaying labelled pull requests
+  common/            trace.py, the structured terminal trace
 ```
+
+Six tables: `installations`, `repos`, `reviews`, `webhook_events`,
+`findings`, `outcomes`.
 
 ### Dependency rules
 
-Enforced by convention, not tooling. Violations are a design smell.
+Enforced by convention. A violation is a design smell, not a build failure.
 
 | Layer | May import | May not import |
 |---|---|---|
 | `config` | nothing from `src` | anything |
 | `webhooks/signature` | nothing from `src` | anything, including FastAPI |
 | `webhooks/events` | nothing from `src` | anything |
+| `llm/*` | `config` | everything else |
 | `db/*` | `config`, `webhooks.events` | `github`, `diff`, `pipeline` |
 | `github/*` | `config` | `db`, `diff`, `pipeline` |
 | `diff/*` | `github.client` | `db`, `pipeline` |
-| `pipeline` | everything below | `webhooks.router` |
-| `webhooks/router` | `config`, `db`, `pipeline`, `webhooks.*` | `diff`, `github` directly |
+| `context/*`, `agents/*` | `llm`, `diff`, `github.client` | `db`, `pipeline` |
+| `pipeline/*` | everything below | `webhooks.router` |
+| `webhooks/router` | `config`, `db`, `pipeline` | `diff`, `github` directly |
 
-Two rules carry weight. **`signature.py` imports no framework**, which is why
-it can be tested without a web server. **`pipeline.py` never imports the
-router**, which is why the evaluation harness can drive it directly.
+Three rules carry weight:
 
----
+- **`signature.py` imports no framework**, so it is testable without a web
+  server.
+- **`pipeline/` never imports the router**, so the evaluation harness drives
+  a review with no HTTP involved.
+- **Nothing outside `llm/` makes an HTTP call to a model.** Every request
+  passes one place, which is where retries, token budgets and tool-call
+  parsing live.
 
-## 2. Configuration — `src/config.py` · built
+## 2. Configuration
 
-```python
-@dataclass(frozen=True)
-class Settings:
-    webhook_secret: str
-    app_id: str
-    client_id: str
-    private_key_path: Path
-    database_url: str
+`src/config.py` reads `.env` once, validates the required variables at
+startup, and hands out a frozen `Settings`. Discovering a missing secret when
+the first pull request arrives is far worse than refusing to start.
 
-    def read_private_key(self) -> str: ...
+Required: `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_CLIENT_ID`,
+`GITHUB_APP_PRIVATE_KEY_PATH`, `DATABASE_URL`.
 
-@lru_cache(maxsize=1)
-def get_settings() -> Settings: ...
-```
+The model is not among them. `LLM_API_KEY` is read where it is used, so a
+service without one still starts and skips reviews with a clear status rather
+than failing to boot.
 
-| Variable | Purpose |
-|---|---|
-| `GITHUB_WEBHOOK_SECRET` | Shared secret for signature verification |
-| `GITHUB_APP_ID` | Numeric App id, used in logs |
-| `GITHUB_CLIENT_ID` | The `iss` claim in the App JWT |
-| `GITHUB_APP_PRIVATE_KEY_PATH` | Path to the `.pem` |
-| `DATABASE_URL` | PostgreSQL connection string |
-| `TEST_DATABASE_URL` | Used only by the test suite |
-| `NEON_DATABASE_URL` | Production database, becomes `DATABASE_URL` on deploy |
+Switches, all read with `os.getenv` at the point of use:
+`AGENTIC_PIPELINE`, `CONTEXT_ENABLED`, `JUDGE_ENABLED`, `SUGGESTIONS_ENABLED`,
+`TEMPLATES_ENABLED`, `RECOVERY_ON_STARTUP`, `PIPELINE_TRACE`.
 
-Missing variables are reported **by name** at startup. The key file is
-checked for existence, not read, so a bad path fails immediately rather than
-on the first webhook.
-
----
-
-## 3. Webhook ingestion — `src/webhooks/` · built
-
-### 3.1 `signature.py`
-
-```python
-SIGNATURE_HEADER = "X-Hub-Signature-256"
-SIGNATURE_PREFIX = "sha256="
-
-def expected_signature(raw_body: bytes, secret: str) -> str
-def is_valid_signature(raw_body: bytes, header_value: str | None, secret: str) -> bool
-```
-
-Two invariants:
-
-1. **Hash the raw bytes.** `json.loads` then `json.dumps` produces semantically
-   identical text with different bytes. The digest will not match.
-2. **Compare with `hmac.compare_digest`.** A plain `==` returns early on the
-   first differing byte, leaking how much of a guess was correct.
-
-### 3.2 `events.py`
-
-```python
-PULL_REQUEST_EVENT = "pull_request"
-ACTIONS_WE_REVIEW = frozenset({"opened", "synchronize", "reopened", "ready_for_review"})
-
-def is_actionable(event: str | None, action: str | None) -> bool
-
-@dataclass(frozen=True)
-class PullRequestEvent:
-    delivery_id: str
-    action: str
-    installation_id: int
-    repo_id: int
-    repo_full_name: str
-    pr_number: int
-    head_sha: str
-    base_sha: str
-
-    @classmethod
-    def from_payload(cls, delivery_id: str, payload: dict) -> PullRequestEvent
-```
-
-`from_payload` raises `KeyError` on a missing field. The router converts that
-into `WEBHOOK_PAYLOAD_INCOMPLETE` rather than letting it surface as a 500.
-
-`repo_id` is GitHub's numeric id, not the name. Repositories get renamed; ids
-do not.
-
-### 3.3 `router.py`
-
-```
-POST /webhooks/github
-```
-
-| Header | Used for |
-|---|---|
-| `X-Hub-Signature-256` | Verification |
-| `X-GitHub-Event` | Event type |
-| `X-GitHub-Delivery` | Delivery-level idempotency key |
-
-Seven steps, each returning immediately on failure:
-
-| Step | On failure |
-|---|---|
-| 1. Verify signature | `401 WEBHOOK_SIGNATURE_INVALID`, nothing stored |
-| 2. Read headers | `400 WEBHOOK_HEADERS_MISSING` |
-| 3. Parse JSON | `400 WEBHOOK_PAYLOAD_MALFORMED` |
-| 4. Extract fields, if actionable | `400 WEBHOOK_PAYLOAD_INCOMPLETE` |
-| 5. Record the delivery | `200 duplicate` if already seen |
-| 6. Claim the commit | `200 duplicate` if already claimed |
-| 7. Schedule the pipeline | — |
-
-**Every authenticated delivery returns 200**, including ignored ones and
-duplicates. GitHub treats any non-2XX as a failed delivery, so a `409` on a
-correctly handled duplicate would report correct behaviour as a failure.
-
-Response bodies:
-
-```json
-{"status": "accepted",  "review_id": 1, "repository": "...", "pull_request": 7, "head_sha": "..."}
-{"status": "duplicate", "delivery": "..."}
-{"status": "ignored",   "event": "pull_request", "action": "labeled"}
-{"error": {"code": "...", "message": "...", "requestId": "req_..."}}
-```
-
----
-
-## 4. GitHub access — `src/github/` · built
-
-### 4.1 `auth.py`
-
-```python
-GITHUB_API = "https://api.github.com"
-API_HEADERS = {"Accept": "application/vnd.github+json",
-               "X-GitHub-Api-Version": "2026-03-10"}
-
-JWT_LIFETIME_SECONDS = 9 * 60
-JWT_BACKDATE_SECONDS = 60
-REFRESH_WHEN_UNDER = timedelta(minutes=5)
-
-def build_app_jwt() -> str
-
-@dataclass(frozen=True)
-class InstallationToken:
-    token: str
-    expires_at: datetime
-    @property
-    def is_still_usable(self) -> bool
-
-async def fetch_installation_token(installation_id: int, *, client=None) -> InstallationToken
-async def get_installation_token(installation_id: int, *, client=None) -> str
-def clear_token_cache() -> None
-```
-
-Two-step authentication:
-
-| Step | What | Lifetime | Scope |
-|---|---|---|---|
-| 1 | JWT signed RS256 with the App private key | 9 minutes | Proves identity only |
-| 2 | Installation token from `POST /app/installations/{id}/access_tokens` | 1 hour | One installation's repositories |
-
-JWT claims: `iat` backdated 60s for clock drift, `exp` under GitHub's 10-minute
-ceiling, `iss` set to the **Client ID** (GitHub's current recommendation over
-the App ID).
-
-Tokens are cached per installation id and refetched when under five minutes
-remain, so a request never begins with a token that expires mid-flight.
-
-### 4.2 `client.py`
-
-```python
-class GitHubClient:
-    def __init__(self, installation_id: int, *, client: httpx.AsyncClient | None = None)
-    async def __aenter__(self) -> GitHubClient
-    async def __aexit__(self, *exc_info) -> None
-    async def get(self, path: str, **params) -> Any
-    async def get_all_pages(self, path: str, *, per_page: int = 100) -> list[Any]
-    async def post(self, path: str, json: Any) -> Any
-```
-
-`get_all_pages` follows `response.links["next"]["url"]` until exhausted. Query
-parameters are dropped after the first request because the `next` link already
-carries its own page number.
-
-Header word differs by token type: `Bearer` for the App JWT, `token` for an
-installation token.
-
-The optional `client` argument exists so tests can inject
-`httpx.MockTransport`. Nothing in the test suite reaches the network.
-
----
-
-## 5. Diff ingestion — `src/diff/` · built
-
-### 5.1 `files.py`
-
-```python
-GITHUB_FILE_LIMIT = 3000
-
-@dataclass(frozen=True)
-class ChangedFile:
-    filename: str
-    status: str
-    additions: int
-    deletions: int
-    changes: int
-    patch: str | None = None
-    previous_filename: str | None = None
-
-    @property
-    def has_patch(self) -> bool
-    @property
-    def is_deleted(self) -> bool
-    @property
-    def is_renamed(self) -> bool
-    @classmethod
-    def from_api(cls, data: dict) -> ChangedFile
-
-@dataclass(frozen=True)
-class ChangedFileSet:
-    files: list[ChangedFile]
-    truncated: bool = False
-
-    @property
-    def reviewable(self) -> list[ChangedFile]
-    @property
-    def without_patch(self) -> list[ChangedFile]
-    @property
-    def total_changes(self) -> int
-
-async def fetch_changed_files(github, repo_full_name: str, pr_number: int) -> ChangedFileSet
-```
-
-Source: `GET /repos/{owner}/{repo}/pulls/{n}/files`, 100 per page.
-
-**GitHub caps the response at 3,000 files with no error.** Reaching exactly
-that count sets `truncated` and logs a warning; without it a huge pull request
-would be reviewed in part while appearing complete.
-
-`patch` is absent for binary files and very large diffs. Those are separated
-into `without_patch` rather than silently dropped, and kept distinct from
-deleted files, where having no diff is normal.
-
-### 5.2 `skip.py`
-
-```python
-MAX_CHANGED_LINES_PER_FILE = 500
-
-@dataclass(frozen=True)
-class SkipDecision:
-    skip: bool
-    reason: str | None = None
-
-def decide(changed: ChangedFile) -> SkipDecision
-def worth_reviewing(files: list[ChangedFile]) -> tuple[list[ChangedFile], dict[str, str]]
-```
-
-| Rule | Examples |
-|---|---|
-| Deleted | nothing to review |
-| No diff | images, binaries |
-| Lockfile | `package-lock.json`, `poetry.lock`, `go.sum`, `Cargo.lock` |
-| Vendored or built | `node_modules/`, `vendor/`, `dist/`, `__snapshots__/` |
-| Generated | `*.min.js`, `*.map`, `*_pb2.py`, `*.pb.go` |
-| Oversized | over 500 changed lines in one file |
-
-`worth_reviewing` returns the reason per skipped file, so logs say *why*
-rather than a file silently vanishing.
-
-### 5.3 `parse.py`
-
-```python
-ADDED, REMOVED, CONTEXT = "added", "removed", "context"
-SIDE_OLD, SIDE_NEW = "LEFT", "RIGHT"
-
-@dataclass(frozen=True)
-class DiffLine:
-    content: str
-    kind: str
-    old_line: int | None
-    new_line: int | None
-
-    @property
-    def side(self) -> str
-    @property
-    def comment_line(self) -> int | None
-
-@dataclass(frozen=True)
-class Hunk:
-    old_start: int
-    old_length: int
-    new_start: int
-    new_length: int
-    lines: list[DiffLine]
-
-@dataclass(frozen=True)
-class FileDiff:
-    filename: str
-    hunks: list[Hunk]
-    parse_error: str | None = None
-
-    @property
-    def parsed(self) -> bool
-    @property
-    def added_line_numbers(self) -> list[int]
-    @property
-    def commentable_lines(self) -> set[int]
-    def can_comment_on(self, line_number: int) -> bool
-
-def ensure_headers(patch: str, filename: str, previous_filename: str | None = None) -> str
-def parse_patch(patch: str, filename: str, previous_filename: str | None = None) -> FileDiff
-def parse_changed_files(file_set: ChangedFileSet) -> list[FileDiff]
-```
-
-Three constraints encoded here:
-
-**GitHub's `patch` field omits the `---`/`+++` headers** that `unidiff`
-requires. `ensure_headers` adds them, using `previous_filename` on the old
-side for renames.
-
-**Both line numbers are kept per line.** GitHub deprecated the `position`
-parameter for review comments in favour of `line` plus `side`. An added line
-is `RIGHT` with its new number; a removed line is `LEFT` with its old number
-and has no new number at all.
-
-**`commentable_lines` is the posting constraint.** GitHub only accepts an
-inline comment on a line present in the diff. A finding about line 300 of a
-file whose diff covers 17–24 cannot be anchored there. This becomes load
-bearing for connected-file context, where findings concern files that were
-never changed.
-
-`parse_patch` never raises. Malformed input returns a `FileDiff` with
-`parse_error` set, so one bad file does not fail a review.
-
----
-
-## 6. Storage — `src/db/` · built
-
-### 6.1 Tables
-
-| Table | Holds | Key constraint |
-|---|---|---|
-| `installations` | Who installed the App | `github_installation_id` unique |
-| `repos` | Repositories we can read | `github_repo_id` unique |
-| `webhook_events` | Every authenticated delivery | `delivery_id` unique |
-| `reviews` | One commit on one pull request | `(repo_id, pr_number, head_sha)` unique |
-| `findings` | One comment about one line | — |
-| `outcomes` | What the developer did with it | — |
-| `repo_suppressions` | Categories a repo has muted | `(repo_id, category)` |
-
-Check constraints reject invalid `status`, `outcome` and `context_status`
-values at the database level.
-
-Indexes: `reviews(repo_id, created_at)` for the dashboard,
-`reviews(status, updated_at)` for the stuck-review scan,
-`findings(review_id)`, `outcomes(repo_id, category)`.
-
-`webhook_events` stores identifying fields only, never the payload. The
-payload contains source code, and retaining it would mean holding other
-people's code without cause.
-
-### 6.2 `queries.py`
-
-```python
-async def record_delivery(session, *, delivery_id, event, action, outcome,
-                          pull_request: PullRequestEvent | None = None) -> int | None
-async def update_delivery(session, delivery_row_id: int, **fields) -> None
-async def ensure_repo(session, pull_request: PullRequestEvent) -> int
-async def claim_review(session, repo_id: int, pull_request: PullRequestEvent) -> int | None
-async def start_attempt(session, review_id: int) -> None
-async def set_review_status(session, review_id: int, *, expected: str, new: str, **extra) -> bool
-```
-
-**Every write uses `INSERT ... ON CONFLICT DO NOTHING ... RETURNING id`.**
-Read-then-write is unsafe: two simultaneous deliveries both see an empty table
-and both insert. Returning `None` is how the caller learns it lost the race.
-
-`set_review_status` only applies when the review is still in `expected`,
-making the status change itself a lock.
-
-### 6.3 `session.py` and `url.py`
-
-`NullPool` — no pooling on our side. Neon's endpoint pools server-side, and a
-pooled connection belongs to the event loop that opened it.
-
-`normalise_database_url` rewrites `postgresql://` to `postgresql+asyncpg://`,
-moves `sslmode` into `connect_args`, drops `channel_binding`, and sets
-`statement_cache_size=0` when the host contains `-pooler`, because a
-transaction pooler may route the next query to a different backend.
-
-### 6.4 Migrations
-
-Alembic, async template. `env.py` builds its engine with `create_async_engine`
-directly rather than from `alembic.ini`, so hosted databases receive their SSL
-`connect_args`. The URL is percent-escaped before entering the config parser.
-
----
-
-## 7. Pipeline — `src/pipeline/record.py` · built through phase 2
-
-```python
-async def process_pull_request(event: PullRequestEvent, review_id: int, *, github_client=None) -> None
-```
-
-Takes a pull request and a review id. **Never an HTTP request.** This is what
-lets the evaluation harness replay historical pull requests with no webhook.
-
-Sequence:
-
-1. Open its own session — the request's session is closed by the time a
-   background task runs
-2. `start_attempt`
-3. `set_review_status(expected="received", new="processing")` — **this is the
-   lock**; a `False` return means something else owns the work, and the run
-   stops having made zero API calls
-4. Fetch changed files
-5. `worth_reviewing`, logging each skip with its reason
-6. `parse_changed_files`
-7. On no reviewable files → `skipped`
-8. On any exception → `failed` with `error_code`
-
----
-
-## 8. Idempotency
+## 3. Idempotency
 
 Two independent keys, catching different problems:
 
 | Key | Catches | Typical cause |
 |---|---|---|
-| `webhook_events.delivery_id` | The same message twice | The Redeliver button |
-| `reviews(repo_id, pr_number, head_sha)` | Two messages about the same code | Reopening a pull request with no new commits |
+| `webhook_events.delivery_id` | the same message twice | the Redeliver button |
+| `reviews(repo_id, pr_number, head_sha)` | two messages about the same code | reopening a pull request with no new commits |
 
-Both produce `200 duplicate`. When the second fires, the delivery row's
+Both answer `200 duplicate`. When the second fires, the delivery row's
 `outcome` is corrected from `accepted` to `duplicate`, so the record stays
-honest about what happened.
+honest.
 
-Review ids skip numbers. A rejected insert still consumes a sequence value.
-This is expected, not a lost row.
+Claiming is an `INSERT ... ON CONFLICT DO NOTHING ... RETURNING id`. Whoever
+writes the row owns the work; the loser gets nothing back. Checking first in
+Python would race when two messages arrive together.
 
----
+Review ids skip numbers, because a rejected insert still consumes a sequence
+value. Expected, not a lost row.
 
-## 9. Review state machine
+## 4. Review state machine
 
 ```
 received ──> processing ──> posting ──> posted
-   │             │                         
-   │             ├──> skipped              
-   │             ├──> no_findings          
-   │             ├──> failed ──> processing (retry, under cap)
-   │             └──> superseded           
+   │             │              │
+   │             ├──> skipped   └──> failed
+   │             ├──> no_findings
+   │             ├──> all_repeats
+   │             ├──> failed ──> processing   (retry, under the attempt cap)
+   │             └──> superseded
    └──> superseded
 ```
 
 | Status | Meaning |
 |---|---|
-| `received` | Commit claimed, nothing started |
-| `processing` | Pipeline running |
-| `posting` | Findings being sent to GitHub |
-| `posted` | Comments live on the pull request |
-| `skipped` | Nothing worth reviewing |
-| `no_findings` | Reviewed, nothing to say |
-| `superseded` | A newer commit made this review irrelevant |
-| `failed` | `error_code` explains why |
+| `received` | commit claimed, nothing started |
+| `processing` | the review is running |
+| `posting` | findings being sent to GitHub |
+| `posted` | comments are live |
+| `skipped` | nothing worth reviewing |
+| `no_findings` | reviewed, nothing to say |
+| `all_repeats` | everything found had already been posted |
+| `superseded` | a newer commit made this review irrelevant |
+| `failed` | `error_code` says why |
 
-`superseded` exists because two quick pushes overlap. The first review must
-not post comments about lines that no longer exist.
+`all_repeats` is deliberately not `no_findings`: a review that found the same
+three bugs again is a different outcome from one that found nothing.
+
+`superseded` is set when a newer commit is claimed for the same pull request.
+A review already in `posting` or past it is left alone, because comments
+cannot be taken back. A running review learns it was superseded when its next
+status update matches no row, and stops before posting.
 
 ### Ordering rules
 
-1. A delivery is recorded before any work begins
-2. A commit is claimed before the pipeline is scheduled
-3. The status moves out of `received` before any external call
-4. `attempts` increments before the status change, so a crash still counts
-5. Findings are stored before posting, so a posting failure loses nothing
-6. `github_review_id` is set only after GitHub accepts
+1. A delivery is recorded before any work begins.
+2. A commit is claimed before the review is scheduled.
+3. The status leaves `received` before any external call.
+4. `attempts` increments before the status change, so a crash still counts.
+5. Findings are stored before posting, so a posting failure loses nothing.
+6. `github_review_id` is set only after GitHub accepts.
+7. **No database session is held across the review itself.** A review can
+   take minutes, and an idle connection is closed by the provider underneath
+   it. The database is touched in short bursts: claim, then the review with
+   nothing open, then store and post.
 
----
+## 5. Error handling
 
-## 10. Error handling
-
-| Code | HTTP | Where | Stored |
+| Code | HTTP | Raised in | Stored |
 |---|---|---|---|
 | `WEBHOOK_SIGNATURE_INVALID` | 401 | router | no |
 | `WEBHOOK_HEADERS_MISSING` | 400 | router | no |
 | `WEBHOOK_PAYLOAD_MALFORMED` | 400 | router | no |
 | `WEBHOOK_PAYLOAD_INCOMPLETE` | 400 | router | no |
 | `PIPELINE_UNEXPECTED` | — | pipeline | `reviews.error_code` |
-| `DIFF_FETCH_FAILED` | — | pipeline | `reviews.error_code` |
+| `COMMENT_POST_FAILED` | — | pipeline | `reviews.error_code` |
+| `LLM_NOT_CONFIGURED` | — | pipeline | `reviews.error_code` |
+| `REVIEW_INTERRUPTED` | — | recovery | `reviews.error_code` |
 
-Nothing that fails verification is written. A pipeline failure degrades the
+Nothing that fails verification is written. A review failure degrades the
 review, never the service.
 
-Every error response carries a `requestId` for correlating logs.
+A failure is recorded on **a fresh database session**, because the session
+that raised may be the cause: once its connection has gone, every further
+statement on it fails, and the record of why would be lost with it.
 
----
+Model failures are classified by what the caller should do:
 
-## 11. Testing
+| Error | Meaning |
+|---|---|
+| `RateLimited` | the minute's budget; wait and retry |
+| `DailyQuotaExhausted` | the day's budget; fail now, retrying is silence |
+| `UnknownTool` | the model invented a tool; tell it the real names |
+| `InvalidResponse` | unreadable reply |
+| `LLMNotConfigured` | no key |
 
-107 tests. **No test reaches the network or the development database.**
+## 6. Recovery
+
+A review interrupted by a restart is left in `processing` with nothing
+working on it. GitHub does not retry, and the uniqueness rule refuses a
+second claim on the same commit, so nothing else will ever move it.
+
+At startup, `recovery.py` scans for reviews stuck past a fifteen-minute
+timeout, takes them over one at a time, and stops at a small number per
+start. The rest are found at the next start, which is the point of scanning
+rather than keeping a queue. A review out of attempts is marked `failed` so
+the row stops claiming to be in progress.
+
+The scan is started, not awaited. GitHub allows ten seconds per delivery, so
+being slow to listen loses messages outright.
+
+## 7. Testing
+
+625 tests, about 16 seconds. **No test reaches the network or the
+development database.**
+
+| Folder | Needs | Count |
+|---|---|---|
+| `tests/unit/` | nothing | 15 files |
+| `tests/integration/` | fake HTTP | 13 files |
+| `tests/database/` | Postgres | 7 files |
+
+The folder is the marker: `empty_tables` reads the path, so `tests/unit`
+runs with no database at all.
 
 | Technique | Used for |
 |---|---|
-| `httpx.MockTransport` | Standing in for GitHub |
+| `httpx.MockTransport` | standing in for GitHub and the model |
 | Separate test database | `pr_review_copilot_test`, truncated between tests |
-| Generated RSA key | Real signing, thrown away after the run |
-| Patched pipeline | Endpoint tests stay about the endpoint |
+| Generated RSA key | real signing, thrown away after the run |
 
-Shared fakes live in `tests/fakes.py`; environment setup and fixtures in
-`tests/conftest.py`, which sets variables before `src.config` is imported.
+`conftest.py` sets the environment before `src.config` is imported, and
+refuses to run if `TEST_DATABASE_URL` and `DATABASE_URL` name the same
+database — the suite would erase it.
 
----
+Shared fakes live in `tests/fakes.py`. See [tests/README.md](../tests/README.md).
 
-## 12. Designed, not built
+## 8. Known gaps
 
-| Module | Planned interface |
-|---|---|
-| `context/` | `gather(repo, head_sha, diffs, budget) -> ContextBundle` |
-| `classification/` | `classify(diffs) -> dict[str, ChangeKind]` |
-| `review/` | `generate(diff, context, template) -> list[Finding]` |
-| `judge/` | `verify(finding, context) -> Verdict` |
-| `filter/` | `filter(findings, threshold) -> list[Finding]` |
-| `outcomes/` | `record(comment_id, outcome) -> None` |
-
-`context/` is the only one with experimental evidence: `spikes/context_spike.py`
-achieves full recall on a fixture with two deliberate traps. Its confidence
-scores are hand-chosen and uncalibrated.
-
----
-
-## 13. Known gaps
-
-1. **No recovery for interrupted reviews.** A crash during `processing` leaves
-   the row there. The `(status, updated_at)` index exists for the scan that
-   will fix this; the scan is unwritten.
-2. **Deliveries that never arrive are invisible.** GitHub does not retry. If
-   the service is asleep when a pull request opens, that review never happens
-   and nothing records it.
-3. **Confidence thresholds are guesses.** Nothing is calibrated against real
-   outcomes yet.
-4. **One language.** Every planned tree-sitter query assumes Python.
+- **Deliveries that never arrive are invisible.** GitHub does not retry. If
+  the service is asleep when a pull request opens, that review never happens
+  and nothing records it.
+- **Confidence thresholds are not calibrated** against real developer
+  outcomes. The `outcomes` table collects the evidence; nothing reads it yet.
+- **No concurrency tests.** Every test is single-threaded against fakes, so
+  the failures that only appear under real concurrency are not reachable from
+  the suite.

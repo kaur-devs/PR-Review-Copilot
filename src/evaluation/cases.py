@@ -27,8 +27,7 @@ class Case:
     # Problems a good reviewer should report.
     expected: tuple[ExpectedFinding, ...] = ()
 
-    # Files the connected-file stage should have retrieved. Scored without
-    # any model call, which is why it can be run as often as you like.
+    # Scored with no model call, so it can be run as often as you like.
     expected_context: tuple[str, ...] = ()
 
     note: str = ""

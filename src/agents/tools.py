@@ -16,9 +16,7 @@ from src.llm.provider import InvalidResponse, ToolCall
 
 logger = logging.getLogger(__name__)
 
-# One read should be a window, not a file. Anything larger is the model
-# asking the wrong question, and answering it generously is how a loop
-# spends its whole budget on turn two.
+# A window, not a file: answering generously spends the budget on turn two.
 MAX_READ_LINES = 200
 MAX_GREP_MATCHES = 40
 MAX_DEFINITIONS = 10

@@ -45,6 +45,13 @@ pull requests, and it is worth more than a weak finding. Report only
 problems you can point at in code you have actually seen. A reviewer who
 invents problems gets muted.
 
+That is about inventing, not about counting. One file can hold several
+unrelated problems, and they are separate findings: a renamed key, a
+handler missing its permission check and an unguarded parse are three,
+not one. Report every one you actually found. Choosing the most serious
+and dropping the rest throws away real bugs — what is worth posting is
+decided after you, by gates you cannot see.
+
 Reply with JSON only, in this shape:
 
 {{"findings": [
@@ -85,10 +92,14 @@ Rules:
   rationale; "useChat.jsx:34 passes five positional arguments" is.
 - Never comment on style, formatting or naming preferences.
 - Never restate what the code does.
-- One finding per problem. Do not repeat yourself.
+- One finding per problem, and one problem per finding. Do not report
+  the same thing twice, and do not bundle two unrelated problems into
+  a single entry so that only one of them can be fixed.
 - suggestion replaces that one line completely. If the line should stay, put
-  it back in your replacement. Use null unless the fix is a small, local edit
-  you are sure about.
+  it back in your replacement. Use null when the fix spans several lines or
+  belongs in another file — but when the whole fix fits on the line you are
+  commenting on, write it. A one-word change like any( to all( is exactly
+  the case to offer, not to skip.
 - In the diff, each line is shown as a number, then + - or a space, then the
   line itself. Everything after that marker is the real line, indentation
   included. Start your suggestion at the same indentation as the line you are
@@ -100,9 +111,9 @@ FOCUS = {
 Correctness and security only. Ignore error handling, concurrency, tests,
 performance and maintainability; another reviewer covers those.
 
-Work through these three questions in order. Each one either produces a
+Work through these four questions in order. Each one either produces a
 suspicion to check or is answered from the diff alone and dropped. When all
-three are done, you are done.
+four are done, you are done.
 
 1. DID A CONTRACT CHANGE?
    A signature, a return shape, a dict key or field name, the number of
@@ -134,15 +145,30 @@ three are done, you are done.
    A query, a path, a command, a deserialiser. Only ask this when the diff
    actually touches one; most changes do not, and this question is then
    answered immediately. Trace the value to the sink before calling it
-   injection. Also flag a secret, token or key written into the diff, and
-   authorisation checked on one path but not a sibling.
+   injection. Also flag a secret, token or key written into the diff.
 
-Most pull requests answer all three with "no" and that is the right result.
+4. WAS SOMETHING LEFT OUT?
+   The first three questions look for what is wrong. This one looks for
+   what is absent, which is harder to see and is where authorisation bugs
+   live.
+
+   Take each new or changed function, endpoint or handler and line it up
+   against its siblings in the file already in front of you — this needs no
+   lookups at all. What do the others have that this one does not? A permission dependency or decorator, a scope filter on a
+   lookup, an ownership check, a guard before the work starts.
+
+   A sibling that checks and a sibling that does not is a finding, not a
+   style difference. Say which line proves it: "create_flag on line 59 has
+   dependencies=[Depends(require_admin)] and this one does not".
+
+Most pull requests answer all four with "no" and that is the right result.
 
 Spend your lookups on question 1. Finding who reads a changed contract is
 worth every call it takes, and one grep for an old name usually settles it.
-Questions 2 and 3 are answered by reading, not by looking things up: if
-either needs more than one lookup, it was never clear enough to report.
+Questions 2, 3 and 4 are answered by reading, not by looking things up: if
+any of them needs more than one lookup, it was never clear enough to report.
+Question 4 in particular costs nothing — the siblings you are comparing
+against are in the file already in front of you.
 
 Re-reading a file you have already seen is not a lookup, it is stalling.""",
     ROBUST: """YOUR SCOPE: does this code hold up when something goes wrong?

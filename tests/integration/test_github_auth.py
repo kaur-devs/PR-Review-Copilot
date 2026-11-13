@@ -43,9 +43,7 @@ def fake_github(token="ghs_example", expires_in_minutes=60, status=200):
     return httpx.AsyncClient(transport=httpx.MockTransport(handle)), calls
 
 
-# ---------------------------------------------------------------------------
-# The short note that proves we are the App
-# ---------------------------------------------------------------------------
+# --- The short note that proves we are the App ---
 
 def test_the_note_is_signed_with_our_private_key():
     """Anyone can read it, but only our key could have produced it."""
@@ -78,9 +76,7 @@ def test_the_note_expires_within_ten_minutes():
     assert lifetime <= 10 * 60
 
 
-# ---------------------------------------------------------------------------
-# Trading the note for a usable token
-# ---------------------------------------------------------------------------
+# --- Trading the note for a usable token ---
 
 @pytest.mark.asyncio
 async def test_we_get_a_token_back():
@@ -114,9 +110,7 @@ async def test_a_refusal_from_github_is_raised_not_swallowed():
         await auth.fetch_installation_token(99, client=client)
 
 
-# ---------------------------------------------------------------------------
-# Not asking GitHub more often than we need to
-# ---------------------------------------------------------------------------
+# --- Not asking GitHub more often than we need to ---
 
 @pytest.mark.asyncio
 async def test_a_token_we_already_have_is_reused():

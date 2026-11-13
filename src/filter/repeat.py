@@ -12,9 +12,7 @@ from src.review.findings import Finding
 
 logger = logging.getLogger(__name__)
 
-# Matches the window the evaluation harness uses when deciding whether a
-# finding hit an expected bug, for the same reason: exact line matching is too
-# strict to be useful.
+# The same window the evaluation harness uses, for the same reason.
 LINE_WINDOW = 3
 
 

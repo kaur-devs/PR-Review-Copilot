@@ -7,8 +7,7 @@ from src.pipeline.single_pass import review_pull_request
 from src.webhooks.events import PullRequestEvent
 from tests.fakes import api_file, fake_github, fake_model, make_patch
 
-# Sixteen lines of padding put the function at 17, so the line numbers in the
-# diff, the file and the finding all have to agree for the test to pass.
+# Padding to line 17, so diff, file and finding line numbers must agree.
 FILE = "\n".join(
     ["# padding"] * 16
     + [

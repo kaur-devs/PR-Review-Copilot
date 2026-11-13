@@ -20,18 +20,13 @@ from src.webhooks.events import PullRequestEvent
 logger = logging.getLogger(__name__)
 
 
-# A review that has sat in one of these for longer than the timeout was
-# abandoned: the process handling it died. Nothing else will ever move it on,
-# because GitHub does not retry and the uniqueness rule refuses a second claim
-# on the same commit.
+# Stuck here past the timeout means the process died; nothing else retries.
 UNFINISHED_STATUSES = ("received", "processing", "posting")
 
-# A whole review takes tens of seconds. Fifteen minutes is long enough that a
-# slow one is never mistaken for a dead one.
+# Long enough that a slow review is never mistaken for a dead one.
 STALE_AFTER = timedelta(minutes=15)
 
-# The attempts column exists to stop us retrying forever. A review that has
-# already been started this many times is not going to work on the next try.
+# Started this many times already and it is not going to work next time.
 MAX_ATTEMPTS = 3
 
 
@@ -75,8 +70,7 @@ async def record_delivery(
             head_sha=pull_request.head_sha if pull_request else None,
         )
         .on_conflict_do_nothing(index_elements=["delivery_id"])
-        # Returns nothing when the insert was refused, which is how the caller
-        # learns it lost the race.
+        # Returns nothing when refused, which is how the caller learns it lost.
         .returning(WebhookEvent.id)
     )
     result = await session.execute(statement)
@@ -121,8 +115,7 @@ async def ensure_repo(session: AsyncSession, pull_request: PullRequestEvent) -> 
         )
     )
 
-    # The repository. If we already know about it, refresh the name in case
-    # it was renamed.
+    # Refresh the name in case the repository was renamed.
     await session.execute(
         insert(Repo)
         .values(
@@ -180,9 +173,7 @@ async def claim_review(
     if review_id is not None:
         return review_id
 
-    # The insert lost, so someone already holds this commit. That is normally
-    # correct and we stop here. But if the holder was abandoned part way
-    # through, nothing else is ever going to finish it.
+    # The insert lost. Normally correct, unless the holder was abandoned.
     return await reclaim_abandoned_review(session, repo_id, pull_request)
 
 

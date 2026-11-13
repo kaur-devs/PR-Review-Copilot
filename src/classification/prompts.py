@@ -7,9 +7,7 @@ from src.llm.provider import CHARACTERS_PER_TOKEN
 
 MAX_PREVIEW_LINES = 12
 
-# A request larger than the whole per-minute window can never succeed, so
-# batching is the only fix: one 65-file pull request asked for 14,874 tokens
-# and was refused outright.
+# A request larger than the per-minute window can never succeed: batch it.
 MAX_PROMPT_TOKENS_PER_REQUEST = 3000
 MAX_PROMPT_CHARACTERS = MAX_PROMPT_TOKENS_PER_REQUEST * CHARACTERS_PER_TOKEN
 

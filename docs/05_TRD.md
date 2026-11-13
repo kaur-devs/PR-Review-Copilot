@@ -1,46 +1,90 @@
-# Technical Requirements Document (TRD)
+# Technical Requirements
 
-## Proposed Architecture
-- **Backend:** Python + FastAPI
-- **GitHub integration:** GitHub App (webhooks + REST API), scoped permissions
-- **LLM:** Groq free tier, `openai/gpt-oss-120b` for generation and `qwen/qwen3.8-27b` for the judge, reached through a provider-agnostic adapter speaking the OpenAI-compatible format. Swapping provider is three environment variables. See ADR-003.
-- **Diff parsing:** `unidiff`
-- **Database:** PostgreSQL (Supabase free tier)
-- **Hosting:** Render (free tier)
+## Stack
 
-## Technology Rationale
-
-### FastAPI
-Async-friendly, well-suited to a webhook-driven service, and matches existing Python fluency.
-
-### GitHub App (not OAuth App or PAT)
-Scoped, installable, per-installation permissions — the correct primitive for a product other repos install, unlike a personal-account-tied PAT.
-
-### Free-tier LLM providers behind an adapter
-Budget-driven architectural decision: the project has no paid-API budget, so all inference runs on free-tier hosted providers. Because free tiers differ in rate limits, structured-output support, and context window, the provider is reached exclusively through an adapter that abstracts authentication, structured JSON generation, token-usage reporting, and rate-limit/retry semantics. Different pipeline stages may run on different providers to spread request quota across accounts.
-
-### PostgreSQL over a document store
-The findings/outcomes/suppression data is relational by nature (foreign keys between reviews, findings, and outcomes) — a structured schema fits better than a flexible document model here.
-
-### No agent framework (raw orchestration)
-Direct API calls per pipeline stage, not a heavy agent framework — keeps the judge/grounding pass fully inspectable and avoids unnecessary abstraction over a pipeline that's fundamentally a fixed sequence, not an open-ended agent loop.
-
-## Technical Requirements
-| ID | Requirement | Maps to |
+| | Choice | Notes |
 |---|---|---|
-| TR-001 | Webhook endpoint with signature verification | BR-002 |
-| TR-002 | Diff fetch + structured parsing | BR-003 |
-| TR-003 | Connected-file context search | BR-004 |
-| TR-004 | Change classifier + prompt template selection | BR-005 |
-| TR-005 | Structured LLM output for findings | BR-005 |
-| TR-006 | Judge/grounding pass | BR-006 |
-| TR-007 | Confidence + dedup filter | BR-007 |
-| TR-008 | Batched GitHub review comment posting | BR-008 |
-| TR-009 | Outcome-tracking schema | BR-009 |
-| TR-010 | Evaluation harness (recall/FP rate) | BR-010 |
+| Backend | Python 3.14, FastAPI | async, webhook-shaped |
+| GitHub | GitHub App — webhooks and REST, scoped permissions | ADR-001 |
+| Model provider | Groq, OpenAI-compatible, behind our own client | ADR-003 |
+| Generation | `openai/gpt-oss-120b` | classification, specialists, summary |
+| Verification | `qwen/qwen3.8-27b` | a different family, deliberately |
+| Orchestration | LangGraph, for flow between stages only | ADR-011 |
+| Diff parsing | `unidiff` | |
+| Code understanding | `tree-sitter` — Python, JavaScript, TypeScript, TSX | |
+| Database | PostgreSQL (Neon) | |
+| Migrations | Alembic | |
+| Hosting | **not deployed** | runs on a laptop |
 
-## NFR Targets
-- Typical PR (≤8 files) reviewed within ~60 seconds, excluding hosting cold-start.
-- All model versions and prompt-template versions recorded per finding.
-- Secrets (GitHub App private key, LLM API key) stored outside source code.
-- No PR source code logged beyond what's necessary for debugging a specific failure.
+Swapping provider is four environment variables: `LLM_API_KEY`,
+`LLM_BASE_URL`, `LLM_MODEL`, `LLM_JUDGE_MODEL`.
+
+## Why these
+
+**FastAPI.** The service is a webhook endpoint that must answer inside ten
+seconds while the real work continues behind it. Async and background tasks
+are the whole requirement.
+
+**A GitHub App, not a token.** An App has its own identity and
+per-installation scoping, which is what a thing other people install needs.
+A personal token is tied to an account and cannot be distributed.
+
+**Free-tier models behind our own client.** There is no budget for paid
+inference, so every stage runs on a free tier. The client is ours rather than
+a library's because the binding constraint is tokens per minute: it has to
+reserve budget *before* sending and distinguish a minute's limit from a
+day's. Libraries that retry after a refusal make that worse.
+
+**PostgreSQL, not a document store.** Reviews, findings and outcomes are
+related by foreign keys, and the idempotency guarantees are unique
+constraints. Both are things a relational database does and a document store
+imitates.
+
+**LangGraph for flow, our code inside it.** Two reviewers run concurrently
+and a verifier loops, so the sequence branches and is worth resuming
+part-way. LangGraph owns the edges between stages; every HTTP call to a model
+stays ours. Full reasoning in ADR-011, which supersedes the earlier decision
+to use no framework at all.
+
+## Requirements
+
+| ID | Requirement | Status |
+|---|---|---|
+| TR-001 | Webhook endpoint with signature verification | built |
+| TR-002 | Diff fetch and structured parsing | built |
+| TR-003 | Connected-file context from a repository snapshot | built |
+| TR-004 | Change classifier, batched to fit the token window | built |
+| TR-005 | Structured, validated output for every model reply | built |
+| TR-006 | Verification by a second model, with abstention | built |
+| TR-007 | Severity and confidence gates; repeats dropped | built |
+| TR-008 | One batched review, comments by line and side | built |
+| TR-009 | Outcome-tracking schema and thread events | built |
+| TR-010 | Evaluation harness with ablations | built |
+| TR-011 | Tool loop with bounded turns, calls and tokens | built |
+| TR-012 | Per-model token budgets, reserved before sending | built |
+| TR-013 | Resume a review interrupted by a restart | built |
+| TR-014 | Retire a review when a newer commit arrives | built |
+| TR-015 | Multi-language parsing: Python, JS, TS, TSX | built, not evaluated |
+| TR-016 | Deployment GitHub can reach | **not built** |
+| TR-017 | Per-repository suppression from outcomes | **not built** |
+| TR-018 | Per-repository configuration file | **not built** |
+
+## Non-functional targets
+
+| | Target | Measured |
+|---|---|---|
+| Review latency | under 60s | **428s** on the free tier, nearly all of it waiting for token budget |
+| Tokens per review | — | ~65,000 on a four-file pull request |
+| Secrets | never in source | `.env`, gitignored; key file path, not the key |
+| Source code in logs | only what a specific failure needs | holds |
+
+The latency target is not met and will not be on a free tier: 8,000 tokens a
+minute against a review that wants 65,000 is nine minutes of waiting before
+any thinking. It is a tier limit, not a code limit — the same review on a
+paid tier fits inside one minute's budget. Stated rather than quietly
+dropped.
+
+**Not met: provenance.** Nothing records which model or prompt version
+produced a finding. The `findings` table has no column for it, so a result
+cannot be traced back to what generated it. For a project whose argument is
+"measured, not claimed", that is the most important of these gaps.

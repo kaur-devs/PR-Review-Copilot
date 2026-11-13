@@ -94,8 +94,7 @@ def test_a_finding_with_no_suggestion_is_not_a_candidate():
 
 
 def test_medium_severity_carries_a_suggestion():
-    # Severity is the model's opinion about impact. On the first live run it
-    # called a crash "medium" and three correct suggestions were thrown away.
+    # A live run called a crash "medium" and lost three correct suggestions.
     assert passes_cheap_checks(make(severity="medium")).allow
 
 
@@ -174,8 +173,7 @@ NESTED = """def charge(amount, dry_run):
 
 
 def test_a_replacement_that_compiles_but_escapes_its_block_is_caught():
-    # Valid Python, and a silent behaviour change: send() now runs even when
-    # dry_run is true. compile() alone has no objection to this.
+    # Valid Python and a silent behaviour change; compile() has no objection.
     patched = apply_to_source(NESTED, 4, "    send(amount)")
     assert is_valid_source("app/stats.py", patched)
 
@@ -221,12 +219,9 @@ def test_what_cpython_rejects():
     assert not is_valid_source("app/stats.py", "x = 'unclosed\n")
 
 
-# ---------------------------------------------------------------------------
-# Shifting a suggestion into place
-# ---------------------------------------------------------------------------
+# --- Shifting a suggestion into place ---
 
-# The real shape from the first live run: a dict literal inside a function,
-# where the model returned the replacement at column zero.
+# From a live run: a dict literal returned at column zero.
 RETURNS_A_DICT = '''def retrieve_context(db, repo_id, question):
     similar_chunks = search(db, repo_id, question)
     sources = []
@@ -275,15 +270,12 @@ def test_blank_lines_are_not_given_trailing_whitespace():
 
 
 def test_a_block_with_nothing_to_give_up_is_not_shifted():
-    # Shifting left by four would have to eat whitespace the second line does
-    # not have, so the shift is refused rather than guessed at.
+    # Shifting left would eat whitespace the second line does not have.
     assert realign(SOURCE, 3, "        if values:\n  pass") is None
 
 
 def test_shifting_preserves_relative_shape_and_leaves_the_rest_to_compile():
-    # Both lines move by the same amount, which keeps their difference. That
-    # is correct even when the difference was nonsense to begin with, and the
-    # compile check is what rejects it.
+    # Both move equally, keeping their difference; compile() rejects nonsense.
     shifted = realign(SOURCE, 3, "        if values:\n     pass")
 
     assert shifted == "    if values:\n pass"

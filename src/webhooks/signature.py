@@ -27,6 +27,5 @@ def is_valid_signature(raw_body: bytes, header_value: str | None, secret: str) -
     if not header_value:
         return False
 
-    # compare_digest, not ==, so the time taken does not reveal how much of
-    # a guess was right.
+    # compare_digest, not ==: timing must not reveal a partial match.
     return hmac.compare_digest(expected_signature(raw_body, secret), header_value)

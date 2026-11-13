@@ -6,8 +6,7 @@ from src.context.bundle import ContextBundle
 from src.evaluation.cases import Case, ExpectedFinding
 from src.review.findings import Finding
 
-# A bug on line 113 reported at 112 is the same bug. Exact matching is too
-# strict to be useful.
+# A bug on line 113 reported at 112 is the same bug.
 LINE_WINDOW = 3
 
 

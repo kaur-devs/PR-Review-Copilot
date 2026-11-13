@@ -185,9 +185,7 @@ def test_findings_are_numbered_so_verdicts_can_be_matched_back():
     assert "[1]" in prompt
 
 
-# ---------------------------------------------------------------------------
-# Abstaining rather than deleting
-# ---------------------------------------------------------------------------
+# --- Abstaining rather than deleting ---
 
 async def test_a_finding_the_judge_cannot_check_is_kept():
     """The failure that cost us a true finding: not seeing the callers is not

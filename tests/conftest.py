@@ -18,12 +18,7 @@ TEST_SECRET = "test-secret-do-not-use-in-production"
 # Read the real .env first, because it holds the test database URL.
 load_dotenv(PROJECT_ROOT / ".env")
 
-# Then override everything the tests should not use real values for. The test
-# database is a completely separate database, so a test run can never touch
-# development data.
-# The suite drops and recreates every table, then truncates between tests.
-# Pointed at the development database that is one command away from deleting
-# the real review history, so it refuses rather than trusting the .env.
+# The suite wipes every table, so it refuses any database but its own.
 if os.environ.get("TEST_DATABASE_URL") == os.environ.get("DATABASE_URL"):
     raise RuntimeError(
         "TEST_DATABASE_URL and DATABASE_URL are the same database. "
@@ -43,21 +38,13 @@ os.environ["LLM_MODEL"] = "test-model"
 # The development trace would drown the test output.
 os.environ["PIPELINE_TRACE"] = "0"
 
-# Startup recovery is tested on purpose, in tests/test_recovery.py. Leaving it
-# on would mean every test that starts the app spawns a background scan.
+# On, every test that starts the app would spawn a background scan.
 os.environ["RECOVERY_ON_STARTUP"] = "0"
 
-# The agentic pipeline is tested on purpose, in tests/test_graph.py, with a
-# model that answers the specialist prompts. Most tests here exercise the
-# single-pass pipeline and would otherwise take a path their fake model
-# cannot answer, failing for a reason that has nothing to do with them.
+# Exercised on purpose in tests/database/test_graph.py.
 os.environ["AGENTIC_PIPELINE"] = "0"
 
-# A throwaway private key, generated fresh each run.
-#
-# It has to be a genuine RSA key rather than a placeholder, because the
-# authentication code really signs with it. It is never GitHub's key and is
-# thrown away when the tests finish.
+# A throwaway RSA key, genuine because the auth code really signs with it.
 def _make_test_key() -> Path:
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa

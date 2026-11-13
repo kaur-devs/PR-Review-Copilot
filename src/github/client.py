@@ -19,12 +19,10 @@ from src.github.auth import API_HEADERS, GITHUB_API, get_installation_token
 
 logger = logging.getLogger(__name__)
 
-# How long to wait before giving up on a request. GitHub is normally fast;
-# waiting forever would block a review indefinitely.
+# Waiting forever would block a review indefinitely.
 TIMEOUT_SECONDS = 15.0
 
-# Matches the per-file cap used when unpacking a snapshot. A file bigger than
-# this is not one we are going to suggest a one-line edit to.
+# Matches the snapshot's per-file cap.
 MAX_FILE_BYTES = 1024 * 1024
 
 
@@ -54,8 +52,7 @@ class GitHubClient:
         token = await get_installation_token(
             self.installation_id, client=self._client
         )
-        # "token" rather than "Bearer" here. GitHub uses Bearer for the App's
-        # own note, and this word for an installation token.
+        # "token", not "Bearer": Bearer is for the App's own JWT.
         return {**API_HEADERS, "Authorization": f"token {token}"}
 
     async def get(self, path: str, **params: Any) -> Any:
@@ -85,8 +82,7 @@ class GitHubClient:
             response.raise_for_status()
             results.extend(response.json())
 
-            # The next link already carries its own page number, so the
-            # parameters must not be sent again.
+            # The next link carries its own page number already.
             url = response.links.get("next", {}).get("url", "")
             params = None
 

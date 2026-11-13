@@ -31,8 +31,7 @@ logger = logging.getLogger(__name__)
 
 REPORTS = Path("eval/reports")
 
-# What docs/29 assumed. Printed beside the measurement so the gap is
-# visible rather than something you have to remember.
+# What docs/29 assumed, printed beside the measurement so the gap shows.
 ASSUMED_TURNS_PER_AGENT = 3
 ASSUMED_TOKENS_PER_REVIEW = 101_500
 
@@ -104,8 +103,7 @@ async def measure_pull_request(
         context = await gather_context(repo, head_sha, installation_id, diffs)
         result.context_items = len(context.items)
 
-        # The toolbox needs the snapshot open for as long as the agents
-        # are looking, so it is opened here rather than inside gather.
+        # Held open for as long as the agents are looking.
         async with open_snapshot(repo, head_sha, installation_id) as snapshot:
             toolbox = Toolbox(snapshot)
             async with LLMProvider.from_env() as model:

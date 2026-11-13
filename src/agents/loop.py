@@ -5,11 +5,13 @@ Design note: docs/30_Design_Notes.md#src-agents-loop
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 
 from src.agents.tools import Toolbox
 from src.llm.provider import (
+    BadToolArguments,
     Completion,
     LLMError,
     LLMProvider,
@@ -24,8 +26,7 @@ MAX_TURNS = 6
 MAX_TOOL_CALLS_PER_TURN = 5
 MAX_TOKENS = 80_000
 
-# How many times to ask for the conclusion before giving up. More than
-# one because a model at the cap often reaches for a last lookup first.
+# Two, because a model at the cap often reaches for one last lookup first.
 LAST_CALL_ATTEMPTS = 2
 
 STOPPED_ANSWERED = "answered"
@@ -34,11 +35,11 @@ STOPPED_TOKEN_CAP = "token cap"
 STOPPED_REPEATING = "no new information"
 STOPPED_FAILED = "model error"
 
-# Sent when the turns run out. Without it a run that explored for six
-# turns ends with nothing to show, having paid for all of them.
+# Without this a run that explored for six turns ends with nothing to show.
 LAST_CALL = (
     "You have no more lookups left. Answer now, using only what you have "
-    "already seen. If you found nothing, say so."
+    "already seen. List every problem you found, not only the most serious "
+    "one. If you found nothing, say so."
 )
 
 ALREADY_RAN = (
@@ -46,10 +47,11 @@ ALREADY_RAN = (
     "result has not changed. Ask something different, or answer."
 )
 
-# How many times a hallucinated tool name may be corrected. Two, because
-# the first correction is usually enough and a model that ignores it twice
-# is not going to be talked round by a third.
+# A model that ignores two corrections will not be talked round by a third.
 MAX_TOOL_NAME_CORRECTIONS = 2
+
+# Arguments the schema refuses, told back to the model the same way.
+MAX_TOOL_ARGUMENT_CORRECTIONS = 2
 
 
 @dataclass
@@ -128,6 +130,7 @@ async def run_agent(
     run = AgentRun()
     seen: dict[str, str] = {}
     corrections = 0
+    arg_corrections = 0
 
     for number in range(1, max_turns + 1):
         try:
@@ -135,9 +138,7 @@ async def run_agent(
                 messages, tools, temperature=temperature
             )
         except UnknownTool as error:
-            # The provider rejected the request, so there is no tool call to
-            # answer and nothing of this turn survives in `messages`. Say
-            # what went wrong as a plain instruction and let it try again.
+            # The request was rejected, so there is no tool call to answer.
             corrections += 1
             logger.warning("agent turn %s: %s", number, error)
             if corrections > MAX_TOOL_NAME_CORRECTIONS:
@@ -147,10 +148,22 @@ async def run_agent(
 
             messages.append({"role": "user", "content": wrong_tool_message(tools)})
             continue
+        except BadToolArguments as error:
+            # A real tool, refused for its arguments. Same shape of mistake
+            # as an invented name, and recoverable the same way.
+            arg_corrections += 1
+            logger.warning("agent turn %s: %s", number, error)
+            if arg_corrections > MAX_TOOL_ARGUMENT_CORRECTIONS:
+                run.stopped_because = STOPPED_FAILED
+                run.error = str(error)
+                break
+
+            messages.append(
+                {"role": "user", "content": bad_arguments_message(error, tools)}
+            )
+            continue
         except LLMError as error:
-            # Not fatal. Everything read so far is still in `messages`, and
-            # abandoning it would throw away a run that has already been
-            # paid for, so fall through and ask for the conclusion.
+            # Not fatal: everything read so far is still in `messages`.
             logger.warning("agent turn %s failed: %s", number, error)
             run.stopped_because = STOPPED_FAILED
             run.error = str(error)
@@ -174,8 +187,7 @@ async def run_agent(
         fresh = _serve(completion, toolbox, messages, seen)
 
         if not fresh:
-            # Every call this turn repeated an earlier one. The model is
-            # circling, not closing in. Ask for the answer it already has.
+            # Every call repeated an earlier one: circling, not closing in.
             run.stopped_because = STOPPED_REPEATING
             break
 
@@ -255,6 +267,17 @@ async def _ask_for_the_answer(
     round, and asking again — the two failure modes do not overlap, and
     between them one of the attempts gets through.
     """
+    # Asked for first, because continuing this conversation is the thing
+    # gpt-oss will not do without reaching for a tool.
+    try:
+        completion = await _answer_in_a_fresh_context(model, messages, temperature)
+        if completion.text:
+            run.answer = completion.text
+            return
+        logger.info("a fresh context returned nothing, staying in the conversation")
+    except LLMError as error:
+        logger.info("could not ask in a fresh context (%s), staying put", error)
+
     messages.append({"role": "user", "content": LAST_CALL})
 
     for attempt in range(1, LAST_CALL_ATTEMPTS + 1):
@@ -296,8 +319,92 @@ async def _ask_for_the_answer(
 async def _final_turn(
     model: LLMProvider, messages: list[dict], temperature: float
 ) -> Completion:
-    """Ask with no tools offered, so the only thing left to do is answer."""
+    """Ask with no tools offered, so the only thing left to do is answer.
+
+    No JSON mode here. Asking this conversation for a JSON object made
+    gpt-oss emit a tool call named "JSON", which is a worse failure than
+    the one it was meant to cure: the loop treated it as a hallucinated
+    tool and abandoned the run.
+    """
     return await model.complete_with_tools(messages, [], temperature=temperature)
+
+
+def lookup_notes(messages: list[dict]) -> list[str]:
+    """What each tool was asked and what it returned, as plain text."""
+    asked: dict[str, str] = {}
+    for message in messages:
+        for call in message.get("tool_calls") or []:
+            function = call.get("function") or {}
+            asked[call.get("id", "")] = (
+                f"{function.get('name', '?')}({function.get('arguments', '')})"
+            )
+
+    notes = []
+    for message in messages:
+        if message.get("role") != "tool":
+            continue
+        question = asked.get(message.get("tool_call_id", ""), "a lookup")
+        notes.append(f"{question}\n{message.get('content', '')}")
+    return notes
+
+
+async def _answer_in_a_fresh_context(
+    model: LLMProvider, messages: list[dict], temperature: float
+) -> Completion:
+    """Ask the same question again, with the lookups as notes.
+
+    gpt-oss continues a tool-calling conversation by calling a tool,
+    whatever it is told and whatever is offered. So the conclusion is
+    asked for in a conversation that contains no tool calls to continue:
+    the same system prompt, the same task, and everything already read
+    pasted in as text. JSON mode is safe here for the same reason.
+    """
+    system = messages[0]["content"] if messages else ""
+    task = messages[1]["content"] if len(messages) > 1 else ""
+    notes = lookup_notes(messages)
+
+    parts = [task]
+    if notes:
+        parts.append("WHAT YOU LOOKED UP ALREADY:\n\n" + "\n\n".join(notes))
+    parts.append(LAST_CALL)
+
+    return await model.complete_with_tools(
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": "\n\n".join(parts)},
+        ],
+        [],
+        temperature=temperature,
+        json_mode=True,
+    )
+
+
+def bad_arguments_message(error: BadToolArguments, tools: list[dict]) -> str:
+    """Told to the model after it calls a real tool the wrong way.
+
+    The schema goes back in full rather than a summary of it: the model
+    already had the summary and still got it wrong.
+    """
+    schema = next(
+        (
+            tool
+            for tool in tools
+            if tool.get("function", {}).get("name") == error.name
+        ),
+        None,
+    )
+    detail = error.detail or "the arguments did not match the schema"
+    lines = [
+        f"That call to {error.name} was rejected: {detail}.",
+        "Nothing was looked up, so this turn told you nothing new.",
+    ]
+    if schema is not None:
+        lines.append(
+            f"The schema for {error.name} is: "
+            f"{json.dumps(schema.get('function', {}).get('parameters', {}))}"
+        )
+    lines.append("Call it again with every required argument, or answer now.")
+    return " ".join(lines)
 
 
 def wrong_tool_message(tools: list[dict]) -> str:

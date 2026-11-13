@@ -121,9 +121,7 @@ async def _record_and_post(
             event, github_client=github_client, llm_client=llm_client
         )
 
-    # Still ours? A newer commit arriving while we were reviewing retires
-    # this review, and the status no longer being "processing" is how we
-    # find out. Posting now would comment on a commit nobody is reading.
+    # No longer "processing" means a newer commit retired this review.
     still_ours = await _status(
         review_id, expected=STATUS_PROCESSING, new=STATUS_PROCESSING,
         context_status=outcome.context.status,
@@ -158,9 +156,7 @@ async def _record_and_post(
         stored = await store_findings(session, review_id, outcome.findings)
     logger.info("review %s: %s findings stored", review_id, stored)
 
-    # The graph runs the gates itself, in a different order, so that
-    # nothing is verified that could never be posted. Re-running them
-    # here would be harmless but would report the held-back count twice.
+    # The graph gates in its own order; re-running would double-count holds.
     gate = (
         GateResult(post=outcome.findings, hold=outcome.held)
         if agentic_enabled()
@@ -178,8 +174,7 @@ async def _record_and_post(
         )
         return
 
-    # Said after the gate, not before: a finding held back last time was never
-    # seen by anyone, so saying it now is new rather than a repeat.
+    # After the gate: something held back last time was never actually said.
     async with get_session_factory()() as session:
         said_before = await previously_posted(session, review_id)
     repeated = drop_repeats(gate.post, said_before)

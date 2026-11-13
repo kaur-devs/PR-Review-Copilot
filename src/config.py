@@ -17,8 +17,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Reads .env into the environment. Values already set in the real environment
-# win, which is how deployment overrides local development.
+# Values already in the real environment win, which is how deployment overrides.
 load_dotenv()
 
 REQUIRED_VARS = (

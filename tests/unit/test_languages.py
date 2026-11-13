@@ -55,9 +55,7 @@ def snapshot(tmp_path):
     return Snapshot(tmp_path, "o/r", "abc123")
 
 
-# ---------------------------------------------------------------------------
-# The registry
-# ---------------------------------------------------------------------------
+# --- The registry ---
 
 def test_each_extension_reaches_its_own_grammar():
     assert support_for("a.py") is PYTHON
@@ -87,9 +85,7 @@ def test_python_and_javascript_are_not():
     assert not same_language("a.py", "b.ts")
 
 
-# ---------------------------------------------------------------------------
-# Resolving an import to a file
-# ---------------------------------------------------------------------------
+# --- Resolving an import to a file ---
 
 def test_python_ignores_who_is_importing():
     assert PYTHON.import_targets("anything.py", "app/models.py") == {
@@ -128,9 +124,7 @@ def test_javascript_keeps_its_dots_because_they_are_the_path():
     assert TYPESCRIPT.normalise_import("./retriever") == "./retriever"
 
 
-# ---------------------------------------------------------------------------
-# Finding symbols in TypeScript
-# ---------------------------------------------------------------------------
+# --- Finding symbols in TypeScript ---
 
 def test_every_shape_of_definition_is_found(snapshot):
     found, health = symbols_in_file(
@@ -147,8 +141,7 @@ def test_every_shape_of_definition_is_found(snapshot):
 
 
 def test_an_exported_definition_is_not_mistaken_for_the_module(snapshot):
-    # "export function f()" wraps the declaration, so the start of the line
-    # lands above it rather than inside.
+    # "export" wraps the declaration, so the line starts above it.
     found, _ = symbols_in_file(snapshot, "src/services/retriever.ts", [1])
 
     assert [s.kind for s in found] == ["function"]
@@ -161,9 +154,7 @@ def test_a_plain_constant_is_not_a_definition(snapshot):
     assert [s.kind for s in found] == ["module"]
 
 
-# ---------------------------------------------------------------------------
-# Finding references across TypeScript files
-# ---------------------------------------------------------------------------
+# --- Finding references across TypeScript files ---
 
 def references(snapshot):
     symbols, _ = symbols_in_file(snapshot, "src/services/retriever.ts", [1, 10])
@@ -200,9 +191,7 @@ def test_a_python_file_with_the_same_name_is_not_a_candidate(snapshot):
     assert all(r.file != "backend/unrelated.py" for r in references(snapshot))
 
 
-# ---------------------------------------------------------------------------
-# Checking a suggestion, which is weaker outside Python
-# ---------------------------------------------------------------------------
+# --- Checking a suggestion, which is weaker outside Python ---
 
 def test_the_grammar_rejects_source_it_cannot_parse():
     assert TYPESCRIPT.is_valid_source("const x = 1;")

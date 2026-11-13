@@ -32,8 +32,7 @@ def fake_model(
         code = remaining.pop(0) if remaining else status
 
         if code != 200:
-            # body is honoured on failures too, so a test can supply the
-            # provider's real error shape rather than a stand-in.
+            # Honoured on failures too, so a test can supply the real shape.
             return httpx.Response(code, json=body or {"error": {"message": "no"}})
 
         payload = body or {
@@ -202,9 +201,7 @@ def test_the_provider_is_three_environment_variables(monkeypatch):
     assert model.model == "something/else:free"
 
 
-# ---------------------------------------------------------------------------
-# Living inside a tokens-per-minute budget
-# ---------------------------------------------------------------------------
+# --- Living inside a tokens-per-minute budget ---
 
 @pytest.fixture(autouse=True)
 def forget_rate_limit_state():

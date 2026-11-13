@@ -28,20 +28,16 @@ class Base(DeclarativeBase):
     """Every table inherits from this. Alembic reads it to see the schema."""
 
 
-# Listed so the database rejects a typo. "superseded": a newer commit
-# arrived. "skipped": nothing worth reviewing. "all_repeats": everything
-# found had already been posted, which is not the same as finding nothing.
+# Listed so the database rejects a typo rather than storing it.
 REVIEW_STATUSES = (
     "received", "processing", "posting", "posted",
     "skipped", "no_findings", "all_repeats", "superseded", "failed",
 )
 
-# "duplicate" covers both seeing the same message twice and already holding
-# the same commit. "ignored" is a real message with nothing to review.
+# "duplicate" covers the same message twice and the same commit twice.
 DELIVERY_OUTCOMES = ("accepted", "duplicate", "ignored")
 
-# "degraded" means some files would not parse and weaker matching was used.
-# "unavailable" means the repository could not be downloaded at all.
+# "degraded": some files would not parse. "unavailable": no snapshot at all.
 CONTEXT_STATUSES = ("ok", "degraded", "unavailable")
 
 
@@ -74,8 +70,7 @@ class Repo(Base):
         ForeignKey("installations.id", ondelete="CASCADE"), index=True
     )
 
-    # We match repositories on this number, never on the name. A repository
-    # can be renamed at any time; its number never changes.
+    # Matched on the number, never the name: a repository can be renamed.
     github_repo_id: Mapped[int] = mapped_column(BigInteger, unique=True)
 
     # Refreshed whenever we see a new name, since repositories get renamed.
@@ -96,10 +91,7 @@ class Review(Base):
 
     __tablename__ = "reviews"
     __table_args__ = (
-        # The important one. Two messages about the same commit can only ever
-        # produce one review, because the database refuses the second. We rely
-        # on this instead of checking first in Python, which would be unsafe
-        # when two messages arrive at the same moment.
+        # Two messages, one review. Checking in Python instead would race.
         UniqueConstraint(
             "repo_id", "pr_number", "head_sha", name="uq_reviews_repo_pr_head"
         ),
@@ -118,8 +110,7 @@ class Review(Base):
     repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id", ondelete="CASCADE"))
     pr_number: Mapped[int] = mapped_column(Integer)
 
-    # The commit we are reviewing. Forty characters because that is the length
-    # of a git commit id.
+    # Forty characters, the length of a git commit id.
     head_sha: Mapped[str] = mapped_column(String(40))
 
     status: Mapped[str] = mapped_column(String(32), default="received")
@@ -137,8 +128,7 @@ class Review(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-    # Updated automatically on every change, which is how we spot a review
-    # that has been sitting in one status for too long.
+    # How we spot a review stuck in one status for too long.
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -167,8 +157,7 @@ class WebhookEvent(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
-    # GitHub's unique id for this message. Unique here too, which is how we
-    # spot the same message arriving twice.
+    # Unique here too, which is how the same message twice is spotted.
     delivery_id: Mapped[str] = mapped_column(String(64), unique=True)
 
     event: Mapped[str] = mapped_column(String(64))
@@ -208,15 +197,12 @@ class Finding(Base):
 
     rationale: Mapped[str] = mapped_column(Text)
 
-    # How sure we are, between 0 and 1. Findings below a threshold are kept
-    # in the database but never posted, so we can tune the threshold later
-    # without running the reviewer again.
+    # Kept below the threshold but never posted, so it can be retuned later.
     confidence: Mapped[float] = mapped_column(Float)
 
     posted: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    # GitHub's id for the comment, so we can later check whether the developer
-    # resolved it or dismissed it.
+    # So we can later see whether the developer resolved or dismissed it.
     github_comment_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     review: Mapped["Review"] = relationship(back_populates="findings")
@@ -231,8 +217,7 @@ class Outcome(Base):
 
     __tablename__ = "outcomes"
     __table_args__ = (
-        # One current outcome per finding. A thread can be resolved and
-        # reopened, so the row is replaced rather than appended to.
+        # A thread can be reopened, so the row is replaced, not appended to.
         UniqueConstraint("finding_id", name="uq_outcomes_finding"),
         Index("ix_outcomes_repo_category", "repo_id", "category"),
     )

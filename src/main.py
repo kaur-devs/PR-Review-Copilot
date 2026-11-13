@@ -24,15 +24,12 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info("starting, GitHub App id %s", settings.app_id)
 
-    # Started, not awaited. A review interrupted by the last restart must not
-    # delay this one from listening: GitHub allows ten seconds per delivery
-    # and never retries, so being slow to start loses messages outright.
+    # Started, not awaited: GitHub allows ten seconds and never retries.
     recovery = start_recovery()
 
     yield
 
-    # Cancelling mid-review leaves it in "processing", which is exactly the
-    # state recovery looks for, so the next start picks it up again.
+    # Cancelling leaves it in "processing", which is what recovery looks for.
     if recovery is not None and not recovery.done():
         recovery.cancel()
 

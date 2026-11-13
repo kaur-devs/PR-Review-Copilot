@@ -19,9 +19,7 @@ CONTRADICTED = "contradicted"
 UNVERIFIABLE = "unverifiable"
 VERDICTS = frozenset({SUPPORTED, CONTRADICTED, UNVERIFIABLE})
 
-# A finding the judge could not check is kept, but trusted less. At the gate's
-# floor of 0.6 this means a strong finding still posts and a middling one does
-# not, rather than everything surviving or nothing.
+# Unchecked is kept but trusted less, so a strong one still clears the gate.
 UNVERIFIABLE_PENALTY = 0.7
 
 
@@ -114,9 +112,7 @@ async def judge_findings(
 
     try:
         if provider is not None:
-            # Reused as it is. Building a second would open another client
-            # and ignore the one a test injected, sending real traffic from
-            # a run meant to be offline.
+            # Building a second would ignore the client a test injected.
             answer = await provider.complete_json(SYSTEM, prompt)
         else:
             async with LLMProvider.from_env(

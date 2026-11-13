@@ -36,9 +36,7 @@ def bundle(files=()):
     ])
 
 
-# ---------------------------------------------------------------------------
-# Matching a finding to a known bug
-# ---------------------------------------------------------------------------
+# --- Matching a finding to a known bug ---
 
 def test_a_finding_on_the_exact_line_matches():
     score = score_case(case([expected(line=100)]), [finding(line=100)], ContextBundle())
@@ -95,9 +93,7 @@ def test_one_finding_cannot_satisfy_two_bugs():
     assert len(score.missed) == 1
 
 
-# ---------------------------------------------------------------------------
-# The measurement that costs nothing
-# ---------------------------------------------------------------------------
+# --- The measurement that costs nothing ---
 
 def test_context_recall_is_scored_without_any_model_call():
     score = score_case(
@@ -121,9 +117,7 @@ def test_context_recall_is_none_when_nothing_was_expected():
     assert score_case(case(), [], ContextBundle()).context_recall is None
 
 
-# ---------------------------------------------------------------------------
-# Totals across cases
-# ---------------------------------------------------------------------------
+# --- Totals across cases ---
 
 def test_a_run_adds_up_across_cases():
     run = RunScore(label="H0")
@@ -163,9 +157,7 @@ def test_failed_cases_are_counted():
     assert run.errors == 1
 
 
-# ---------------------------------------------------------------------------
-# The case file
-# ---------------------------------------------------------------------------
+# --- The case file ---
 
 def test_cases_load_from_disk(tmp_path):
     path = tmp_path / "cases.json"

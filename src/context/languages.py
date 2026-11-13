@@ -19,9 +19,7 @@ from tree_sitter import Language, Parser, Query
 class LanguageSupport:
     name: str
 
-    # Grammars that can see each other's code. TypeScript, TSX and plain
-    # JavaScript are three grammars and one language as far as imports are
-    # concerned: a .tsx component importing a .ts service is ordinary.
+    # Three grammars, one language as far as imports are concerned.
     family: str
 
     suffixes: frozenset[str]
@@ -31,7 +29,6 @@ class LanguageSupport:
     definition_types: frozenset[str]
     kind_by_type: dict[str, str]
 
-    # Parents that mean an identifier is being imported rather than used.
     # Without these, every import line counts as a reference to itself.
     import_node_types: frozenset[str]
 
@@ -78,8 +75,7 @@ class LanguageSupport:
 @dataclass(frozen=True)
 class PythonSupport(LanguageSupport):
     def normalise_import(self, text: str) -> str:
-        # "from .retriever import x" gives ".retriever". The leading dots say
-        # how far up the package to look, which we do not track.
+        # Leading dots say how far up the package to look; we do not track it.
         return text.lstrip(".")
 
     def import_targets(self, importing_file: str, defining_file: str) -> set[str]:
@@ -151,8 +147,7 @@ PYTHON = PythonSupport(
 )
 
 
-# JavaScript, TypeScript and JSX: three tree-sitter grammars, one set of
-# queries, because they differ only where this file does not look.
+# Three tree-sitter grammars, one set of queries.
 
 JS_CALLS = "(call_expression function: (identifier) @name) @call"
 
@@ -165,9 +160,7 @@ JS_ATTRIBUTE_CALLS = """
 
 JS_IDENTIFIERS = "(identifier) @name"
 
-# Capture names are the contract: analyse_imports reads them and knows no
-# language. Patterns follow document order (clause before source), and !alias
-# stops an aliased import matching twice.
+# Capture names are the contract; !alias stops an aliased import matching twice.
 JS_IMPORTS = """
 (import_statement
   (import_clause (named_imports (import_specifier !alias name: (identifier) @imported)))
@@ -184,13 +177,10 @@ JS_IMPORTS = """
   source: (string (string_fragment) @module_only))
 """
 
-# A function written as a value - const chunk = (text) => ... - is a variable
-# declarator, not a function. Treating every declarator as a definition would
-# make "const limit = 8" a symbol, so the value has to be checked.
+# const chunk = (text) => ... is a declarator, so the value has to be checked.
 FUNCTION_VALUES = frozenset({"arrow_function", "function_expression", "function"})
 
-# Extensions an import is allowed to leave off. Longest first, so ".d.ts" is
-# tried before ".ts".
+# Longest first, so ".d.ts" is tried before ".ts".
 JS_OMITTABLE = (".d.ts", ".tsx", ".jsx", ".mjs", ".cjs", ".ts", ".js")
 
 

@@ -123,8 +123,19 @@ async def test_an_invented_severity_is_dropped():
     assert await run(fake_model([valid_finding(severity="catastrophic")])) == []
 
 
-async def test_an_invented_category_is_dropped():
-    assert await run(fake_model([valid_finding(category="vibes")])) == []
+async def test_a_category_we_do_not_use_is_translated_not_dropped():
+    """A real finding was deleted in review 18 for calling an unclosed
+    httpx client "resource_management". The bug was real and the line was
+    right; only the label was wrong, and nothing downstream reads it."""
+    findings = await run(fake_model([valid_finding(category="resource_management")]))
+
+    assert [f.category for f in findings] == ["error_handling"]
+
+
+async def test_a_category_nobody_recognises_still_keeps_the_finding():
+    findings = await run(fake_model([valid_finding(category="vibes")]))
+
+    assert [f.category for f in findings] == ["correctness"]
 
 
 async def test_a_finding_with_no_message_is_dropped():

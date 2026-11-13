@@ -33,7 +33,18 @@ def reset_quota():
 
 
 BEFORE = ["def charge(amount):", "    return amount"]
-AFTER = ["def charge(amount, currency):", "    return amount * rate(currency)"]
+AFTER = [
+    "def charge(amount, currency):",
+    "    rate = rates[currency]",
+    "    if rate is None:",
+    "        raise KeyError(currency)",
+    "    total = amount * rate",
+    "    audit(total)",
+    "    settle(total)",
+    "    notify(total)",
+    "    record(total)",
+    "    return total",
+]
 
 
 def a_diff(path="app/billing.py"):
@@ -188,13 +199,13 @@ async def test_both_specialists_write_to_one_list_without_erasing_each_other(box
     the first, and half the review disappears silently."""
     client, _ = model_server(
         wrong={"findings": [finding_json(line=1)]},
-        robust={"findings": [finding_json(line=2, category="error_handling")]},
+        robust={"findings": [finding_json(line=9, category="error_handling")]},
     )
 
     final = await run(client, box)
 
     assert len(final["candidates"]) == 2
-    assert {f.line for f in final["candidates"]} == {1, 2}
+    assert {f.line for f in final["candidates"]} == {1, 9}
 
 
 # ------------------------------------------------------ conditional edges
@@ -223,10 +234,7 @@ async def test_nothing_surviving_the_gate_skips_the_verifier(box):
     assert not any("finding is real" in s for s in systems)
     assert final["to_post"] == []
 
-    # No summary either. Nothing is posted when the gates keep nothing,
-    # so writing one spends a model call on text no one is shown. If a
-    # clean pull request should get a "looks good" comment one day, that
-    # is a change in pipeline.py as well as here.
+    # Nothing posts when the gates keep nothing, so a summary is wasted.
     assert final["summary"] == ""
     assert not any("opening comment" in s for s in systems)
 
@@ -444,7 +452,5 @@ async def test_the_cheap_judge_uses_the_provider_the_graph_opened(box):
 
     await run(client, box)
 
-    # A medium finding at 0.9 goes to the cheap judge, not the agentic
-    # verifier. Its prompt appearing here proves the call came through the
-    # injected client rather than a provider the judge built for itself.
+    # Its prompt appearing here proves the injected client was used.
     assert any("supported by the code" in b["messages"][0]["content"] for b in sent)

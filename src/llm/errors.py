@@ -50,10 +50,27 @@ class UnknownTool(LLMError):
         self.name = name
 
 
-# What the provider calls a rejected tool name, and the shape of the
-# message it comes wrapped in.
+class BadToolArguments(LLMError):
+    """The model called a real tool with arguments the schema refuses.
+
+    Rejected by the provider before our toolbox sees it, exactly like an
+    invented name, so the ToolFailure path never runs and the turn is lost.
+    Raised separately so the loop can name the tool and what it omitted,
+    which is the only thing that makes the next turn different.
+    """
+
+    def __init__(self, message: str, *, name: str = "", detail: str = "") -> None:
+        super().__init__(message)
+        self.name = name
+        self.detail = detail
+
+
+# What the provider calls a rejected tool name, and how it is wrapped.
 TOOL_USE_FAILED = "tool_use_failed"
 UNKNOWN_TOOL_PATTERN = re.compile(r"attempted to call tool '([^']+)'")
+BAD_ARGUMENTS_PATTERN = re.compile(
+    r"parameters for tool '?([\w.-]+)'? did not match schema:?\s*([^\"\n]*)"
+)
 
 
 def _unknown_tool(body: str) -> UnknownTool | None:
@@ -75,4 +92,26 @@ def _unknown_tool(body: str) -> UnknownTool | None:
     name = match.group(1)
     return UnknownTool(
         f"the model called a tool that does not exist: {name!r}", name=name
+    )
+
+
+def _bad_tool_arguments(body: str) -> BadToolArguments | None:
+    """A BadToolArguments if this 400 rejects a real tool's arguments.
+
+    Seen live as `parameters for tool read_file did not match schema:
+    errors: [missing properties: 'path']`, twice in one review, each time
+    costing a whole turn.
+    """
+    if TOOL_USE_FAILED not in body:
+        return None
+
+    match = BAD_ARGUMENTS_PATTERN.search(body)
+    if match is None:
+        return None
+
+    name, detail = match.group(1), match.group(2).strip()
+    return BadToolArguments(
+        f"the model called {name!r} with arguments the schema refuses: {detail}",
+        name=name,
+        detail=detail,
     )

@@ -7,11 +7,13 @@ order the API demands, and always reports honestly what it did.
 """
 
 import json
+import pathlib
 
 import httpx
 import pytest
 
 from src.agents.loop import (
+    lookup_notes,
     LAST_CALL_ATTEMPTS,
     MAX_TOOL_CALLS_PER_TURN,
     STOPPED_ANSWERED,
@@ -200,10 +202,8 @@ async def test_the_turn_cap_still_produces_an_answer(box):
 
     assert result.stopped_because == STOPPED_TURN_CAP
     assert result.answer == "here is what I found"
-    assert sent[-1]["messages"][-1]["content"].startswith("You have no more lookups")
-    # No tools in the last request. Shown lookups it has been told it may
-    # not use, gpt-oss reaches for one anyway and the run ends with no
-    # answer, having paid for every turn that came before.
+    assert "You have no more lookups" in sent[-1]["messages"][-1]["content"]
+    # Shown lookups it may not use, gpt-oss reaches for one and never answers.
     assert "tools" not in sent[-1]
 
 
@@ -249,7 +249,7 @@ async def test_the_token_cap_stops_it(box):
     assert result.stopped_because == "token cap"
     assert result.answer == "stopping"
     assert len(sent) == 2
-    assert sent[1]["messages"][-1]["content"].startswith("You have no more lookups")
+    assert "You have no more lookups" in sent[-1]["messages"][-1]["content"]
 
 
 async def test_a_model_failure_is_reported_not_raised(box):
@@ -307,6 +307,7 @@ async def test_a_last_lookup_on_the_final_turn_is_served_not_refused(box):
     """
     client, sent = scripted(
         calls(("grep", {"pattern": "a"})),
+        calls(("grep", {"pattern": "b"})),
         calls(("read_file", {"path": "app/models.py"})),
         says("now I can answer"),
     )
@@ -315,6 +316,7 @@ async def test_a_last_lookup_on_the_final_turn_is_served_not_refused(box):
 
     assert result.stopped_because == STOPPED_TURN_CAP
     assert result.answer == "now I can answer"
+    # Turn one's lookup, and the one it reached for at the cap.
     served = [m for m in sent[-1]["messages"] if m["role"] == "tool"]
     assert len(served) == 2
 
@@ -327,7 +329,7 @@ async def test_an_agent_that_will_not_answer_is_given_up_on(box):
     result = await run(client, box, max_turns=1)
 
     assert not result.answered
-    assert len(sent) <= 1 + LAST_CALL_ATTEMPTS
+    assert len(sent) <= 2 + LAST_CALL_ATTEMPTS
 
 
 # --------------------------------------------- a tool name that does not exist
@@ -412,8 +414,10 @@ async def test_a_failed_turn_keeps_what_earlier_turns_found(box):
 
     assert result.answer == "a conclusion from what I read"
     assert result.stopped_because == STOPPED_FAILED
-    # The file it read on turn one is still in the conversation.
-    assert any(m["role"] == "tool" for m in sent[-1]["messages"])
+    # What it read on turn one survived the failure, either as a tool
+    # message or pasted into a fresh prompt as a note.
+    last = sent[-1]["messages"]
+    assert any(m["role"] == "tool" for m in last) or "WHAT YOU LOOKED UP" in last[-1]["content"]
 
 
 async def test_the_last_call_offers_no_tools(box):
@@ -436,6 +440,8 @@ async def test_the_last_call_falls_back_to_offering_tools(box):
     provider then refuses the request. That must not be the end of it."""
     client, sent = scripted_with(
         calls(("grep", {"pattern": "x"})),
+        # The fresh context is tried first and is refused the same way.
+        rejects_the_tool_name(),
         rejects_the_tool_name(),
         says("answered on the retry"),
     )
@@ -443,5 +449,99 @@ async def test_the_last_call_falls_back_to_offering_tools(box):
     result = await run(client, box, max_turns=1)
 
     assert result.answer == "answered on the retry"
-    assert "tools" not in sent[1]
-    assert sent[2]["tools"]
+    offered_again = [body for body in sent[1:] if body.get("tools")]
+    assert offered_again, "after a refusal the tools go back on the table"
+
+
+
+# ------------------------------------------------- the last call for an answer
+
+async def test_the_final_turn_demands_a_json_object(box):
+    """A reply that must be a JSON object cannot be a tool call.
+
+    Withholding the tools is not enough on its own: gpt-oss emits a call
+    anyway and the provider refuses the request with "Tool choice is none,
+    but model called a tool". In one 36-agent review that happened on every
+    final turn, and two agents returned nothing after more than twenty
+    thousand tokens each.
+    """
+    client, sent = scripted(
+        calls(("read_file", {"path": "app/models.py"})),
+        says(json.dumps({"findings": []})),
+    )
+
+    await run(client, box, max_turns=1)
+
+    final = sent[-1]
+    assert final["response_format"] == {"type": "json_object"}
+    assert not final.get("tools"), "the final turn offers no tools"
+
+
+async def test_json_mode_is_never_asked_for_while_tools_are_offered(box):
+    """Providers disagree about the combination, and a refusal mid-loop
+    throws away every turn already paid for."""
+    client, sent = scripted(
+        calls(("read_file", {"path": "app/models.py"})),
+        says(json.dumps({"findings": []})),
+    )
+
+    await run(client, box, max_turns=2)
+
+    offered = [body for body in sent if body.get("tools")]
+    assert offered, "the loop should have offered tools at least once"
+    assert all("response_format" not in body for body in offered)
+
+
+async def test_the_answer_is_asked_for_in_a_conversation_with_no_tool_calls():
+    """gpt-oss continues a tool-calling conversation by calling a tool,
+    whatever it is told and whatever is offered. Review 18 lost whole
+    agents to it after they had spent twenty thousand tokens reading.
+
+    So the conclusion is asked for in a fresh conversation: same system
+    prompt, same task, and the lookups pasted in as notes. There is no
+    tool call in it to continue.
+    """
+    client, sent = scripted(
+        calls(("grep", {"pattern": "get_user"})),
+        says(json.dumps({"findings": []})),
+    )
+
+    async with LLMProvider(api_key="k", client=client) as model:
+        box = Toolbox(Snapshot(pathlib.Path("."), "o/r", "abc"))
+        result = await run_agent(
+            model, box, system="review this", user="a diff",
+            tools=SCHEMAS, max_turns=1,
+        )
+
+    assert result.answered
+
+    final = sent[-1]
+    assert not final.get("tools"), "no tools, so there is nothing to reach for"
+    assert final["response_format"] == {"type": "json_object"}
+
+    roles = {message["role"] for message in final["messages"]}
+    assert roles == {"system", "user"}, "no assistant tool calls to continue"
+
+    prompt = final["messages"][-1]["content"]
+    assert "a diff" in prompt, "the original task is restated"
+    assert "WHAT YOU LOOKED UP ALREADY" in prompt
+    assert "get_user" in prompt, "the lookup survives as a note"
+
+
+def test_lookup_notes_pair_each_result_with_what_asked_for_it():
+    messages = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "u"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "a", "type": "function",
+                 "function": {"name": "grep", "arguments": '{"pattern":"x"}'}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "a", "content": "two matches"},
+    ]
+
+    notes = lookup_notes(messages)
+
+    assert notes == ['grep({"pattern":"x"})\ntwo matches']

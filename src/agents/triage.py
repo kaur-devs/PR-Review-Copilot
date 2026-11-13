@@ -21,28 +21,24 @@ from src.classification.kinds import (
 
 logger = logging.getLogger(__name__)
 
-# What each kind of change could plausibly contain. A reviewer that
-# cannot find anything here is a reviewer not worth running.
+# What each kind of change could plausibly contain.
 WAKES: dict[str, tuple[str, ...]] = {
     # Behaviour can be wrong and can fail badly.
     LOGIC: (WRONG, ROBUST),
     API: (WRONG, ROBUST),
     SCHEMA: (WRONG, ROBUST),
 
-    # A secret in plain text or a changed default is a correctness and
-    # security question. There is no error handling to get wrong.
+    # A leaked secret or changed default; no error handling to get wrong.
     CONFIG: (WRONG,),
     DEPENDENCY: (WRONG,),
 
-    # A weakened test is worth knowing about, and it is the robustness
-    # reviewer that is told to look for one.
+    # The robustness reviewer is the one told to look for a weakened test.
     TEST: (ROBUST,),
 
     DOCS: (),
 }
 
-# Changes that deserve more attention, said plainly in the summary so a
-# human reviewer knows where to look rather than reading everything.
+# Said plainly in the summary so a human knows where to look.
 RISKY_KINDS = (SCHEMA, API)
 
 

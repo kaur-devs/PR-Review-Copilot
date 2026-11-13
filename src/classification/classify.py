@@ -89,8 +89,7 @@ async def classify(
                 SYSTEM, build_user_prompt(batch, symbols)
             )
         except LLMError as error:
-            # Only this batch falls back. One refused request used to cost us
-            # the labels for every file in the pull request.
+            # Only this batch falls back; one refusal used to cost them all.
             logger.warning(
                 "classification fell back to logic for %s file(s): %s",
                 len(expected),

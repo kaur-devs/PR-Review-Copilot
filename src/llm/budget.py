@@ -17,8 +17,7 @@ from src.llm.settings import DEFAULT_MODEL, MAX_WAIT_SECONDS
 
 logger = logging.getLogger(__name__)
 
-# Free tiers cap tokens per minute, so we wait for the window to refill
-# rather than sending into a refusal.
+# Free tiers cap tokens per minute, so we wait rather than be refused.
 HEADER_REMAINING_TOKENS = "x-ratelimit-remaining-tokens"
 HEADER_RESET_TOKENS = "x-ratelimit-reset-tokens"
 HEADER_LIMIT_TOKENS = "x-ratelimit-limit-tokens"
@@ -26,13 +25,10 @@ HEADER_LIMIT_TOKENS = "x-ratelimit-limit-tokens"
 # Roughly four characters to a token. Good enough to decide whether to wait.
 CHARACTERS_PER_TOKEN = 4
 
-# The answer is charged too, and is unknowable until it arrives. Without a
-# reservation for it every estimate is slightly under, which on a shared
-# budget is a steady trickle of unexplained refusals.
+# The answer is charged too, so reserve for it or every estimate runs under.
 COMPLETION_ALLOWANCE = 1_200
 
-# A daily budget does not refill in ninety seconds, so retrying one is a
-# way of turning a clear failure into six minutes of silence.
+# A daily budget does not refill in ninety seconds, so retrying it is silence.
 DAILY_LIMIT_MARKER = "tokens per day"
 
 
@@ -91,8 +87,7 @@ class RateLimitState:
     _gate: asyncio.Lock | None = None
 
     def _lock(self) -> asyncio.Lock:
-        # Built on first use: a Lock made at import time binds to whichever
-        # event loop happens to be running then, and the tests run several.
+        # Built on first use: a Lock made at import time binds the wrong loop.
         if self._gate is None:
             self._gate = asyncio.Lock()
         return self._gate
@@ -113,9 +108,7 @@ class RateLimitState:
         except ValueError:
             return
 
-        # Never above what is already reserved. A response that left the
-        # provider before a sibling request arrived describes a budget
-        # that has since been spent.
+        # Never above what is reserved: a reply in flight describes a stale budget.
         self.remaining_tokens = (
             reported
             if self.remaining_tokens is None
@@ -149,8 +142,7 @@ class RateLimitState:
                     f"only {self.remaining_tokens} tokens left this minute, "
                     f"this request needs about {estimated_tokens}",
                 )
-                # The window has turned over. Until a real header arrives,
-                # a full budget is the best guess we have.
+                # The window turned over; a full budget is the best guess.
                 self.remaining_tokens = self.limit_tokens
 
             if self.remaining_tokens is not None:
@@ -189,9 +181,7 @@ class QuotaCounter:
 
 quota = QuotaCounter()
 
-# One budget per model id, because that is how the provider counts them.
-# Sharing one made a wait on the review model hold up the judge, whose own
-# budget was untouched.
+# One per model id: sharing made a wait on one hold up the other.
 _limiters: dict[str, RateLimitState] = {}
 
 
@@ -214,8 +204,7 @@ def forget_rate_limits() -> None:
         state.seen_at = 0.0
 
 
-# Kept as the limiter for the default model so existing callers and tests
-# that reach for "the" rate limiter still find one.
+# The default model's limiter, for callers that reach for "the" rate limiter.
 rate_limit = limiter_for(DEFAULT_MODEL)
 
 

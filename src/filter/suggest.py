@@ -15,13 +15,11 @@ from src.review.findings import SEVERITY_HIGH, SEVERITY_MEDIUM, Finding
 
 logger = logging.getLogger(__name__)
 
-# Stricter than the 0.6 posting gate. High-severity-only was tried first and
-# refused three correct suggestions the model had labelled "medium".
+# Stricter than the 0.6 posting gate; severity alone refused correct ones.
 SUGGESTABLE_SEVERITIES = frozenset({SEVERITY_HIGH, SEVERITY_MEDIUM})
 MINIMUM_CONFIDENCE = 0.8
 
-# A suggestion is posted inside a fenced block, so a suggestion containing a
-# fence would close it early and spill the rest into the comment as prose.
+# A fence inside a suggestion would close the block early.
 FENCE = "```"
 
 
@@ -36,8 +34,7 @@ class SuggestionDecision:
     allow: bool
     reason: str = ""
 
-    # The text to post, which may have been shifted to line up with the code
-    # it replaces. None when nothing was changed or nothing is allowed.
+    # May have been shifted to line up with the code it replaces.
     suggestion: str | None = None
 
 
@@ -156,16 +153,13 @@ def survives_parsing(
     source: str, line: int, suggestion: str, path: str
 ) -> SuggestionDecision:
     if not is_valid_source(path, source):
-        # Without a clean starting point there is nothing to compare against,
-        # so we cannot blame the suggestion either way. Refuse rather than
-        # guess: an unverified suggestion should not get an Apply button.
+        # Nothing to compare against, so the suggestion cannot be cleared.
         return SuggestionDecision(False, "the file does not parse as it is")
 
     if not 1 <= line <= len(source.splitlines()):
         return SuggestionDecision(False, f"line {line} is not in the file")
 
-    # Shifted before anything is checked, so what gets compiled and what gets
-    # posted are the same text.
+    # Shifted first, so what compiles and what posts are the same text.
     shifted = realign(source, line, suggestion)
     if shifted is None:
         return SuggestionDecision(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -46,9 +47,7 @@ class ReviewOutcome:
     seconds: float = 0.0
     skipped: str | None = None
 
-    # Produced by the agentic pipeline only. The single-pass one writes no
-    # summary, holds nothing back past the gate it already reports, and
-    # has no turns to count.
+    # Filled in by the agentic pipeline only.
     summary: str = ""
     held: list[tuple[Finding, str]] = field(default_factory=list)
     turns: int = 0
@@ -73,12 +72,26 @@ async def _settle_suggestions(
     if not wanted:
         return settle(findings, unverified=unverified)
 
-    sources: dict[str, str] = {}
+    # One read per file, together: findings spread across as many files as
+    # the specialists were scoped to, and serially that is a round trip
+    # each before anything can be offered.
+    paths = sorted(wanted)
     async with GitHubClient(event.installation_id, client=client) as github:
-        for path in sorted(wanted):
-            text = await github.read_file(event.repo_full_name, path, event.head_sha)
-            if text is not None:
-                sources[path] = text
+        texts = await asyncio.gather(
+            *(
+                github.read_file(event.repo_full_name, path, event.head_sha)
+                for path in paths
+            ),
+            return_exceptions=True,
+        )
+
+    sources: dict[str, str] = {}
+    for path, text in zip(paths, texts):
+        if isinstance(text, BaseException):
+            logger.warning("could not read %s for a suggestion: %s", path, text)
+            continue
+        if text is not None:
+            sources[path] = text
 
     return settle(findings, sources=sources, unverified=unverified)
 

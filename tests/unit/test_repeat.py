@@ -37,8 +37,7 @@ def test_a_different_file_is_not_a_repeat():
 
 
 def test_wording_is_not_part_of_the_comparison():
-    # The generator is not deterministic, so the same bug comes back worded
-    # differently. Matching on wording would dedupe almost nothing.
+    # The same bug comes back worded differently; wording would dedupe nothing.
     reworded = Finding(
         file="app/stats.py", line=113, severity="high", category="correctness",
         message="completely different words for the same problem",

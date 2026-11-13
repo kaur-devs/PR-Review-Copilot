@@ -10,8 +10,7 @@ from src.llm.errors import InvalidResponse
 
 logger = logging.getLogger(__name__)
 
-# What the provider says about why it stopped. "tool_calls" means the model
-# wants something run before it can answer.
+# Why it stopped. "tool_calls" means it wants something run first.
 FINISH_STOP = "stop"
 FINISH_TOOL_CALLS = "tool_calls"
 

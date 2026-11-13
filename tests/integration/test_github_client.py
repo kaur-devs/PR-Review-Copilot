@@ -28,8 +28,7 @@ async def test_a_request_carries_an_installation_token():
         await github.get("/repos/owner/name/pulls/1")
 
     data_request = calls[-1]
-    # "token" is the word GitHub expects for an installation token. "Bearer"
-    # is only for the App's own note.
+    # "token" for an installation token; "Bearer" is for the App's own JWT.
     assert data_request.headers["Authorization"] == "token ghs_test"
 
 

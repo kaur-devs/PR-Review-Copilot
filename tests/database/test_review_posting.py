@@ -43,9 +43,7 @@ def make(severity="high", line=10, confidence=0.9, evidence=(), suggestion=None)
     )
 
 
-# ---------------------------------------------------------------------------
-# What a comment looks like
-# ---------------------------------------------------------------------------
+# --- What a comment looks like ---
 
 def test_a_comment_leads_with_severity_and_category():
     body = build_comment_body(make())
@@ -77,9 +75,7 @@ def test_the_rationale_is_not_repeated_when_it_matches_the_message():
     assert build_comment_body(finding).count("same text") == 1
 
 
-# ---------------------------------------------------------------------------
-# What the review summary says
-# ---------------------------------------------------------------------------
+# --- What the review summary says ---
 
 def test_the_summary_counts_by_severity():
     body = build_review_body([make("high"), make("high", line=2), make("medium", line=3)], 0)
@@ -99,9 +95,7 @@ def test_a_review_with_nothing_to_say_says_so():
     assert build_review_body([], 0) == "No issues found."
 
 
-# ---------------------------------------------------------------------------
-# The shape GitHub requires
-# ---------------------------------------------------------------------------
+# --- The shape GitHub requires ---
 
 def test_each_comment_is_anchored_to_a_file_line_and_side():
     comments = build_comments([make(line=42)])
@@ -117,9 +111,7 @@ def test_comments_use_line_and_side_rather_than_the_deprecated_position():
     assert "position" not in comments[0]
 
 
-# ---------------------------------------------------------------------------
-# Posting
-# ---------------------------------------------------------------------------
+# --- Posting ---
 
 async def test_a_review_is_posted_as_a_comment_never_as_a_block():
     """ADR-005: the tool comments, it never blocks a merge."""
@@ -209,9 +201,7 @@ async def test_comments_from_another_review_are_not_claimed():
     assert [c.comment_id for c in found] == [2]
 
 
-# ---------------------------------------------------------------------------
-# Recording what was posted
-# ---------------------------------------------------------------------------
+# --- Recording what was posted ---
 
 async def test_posted_findings_are_marked_and_linked():
     from src.github.review import PostedComment
@@ -270,9 +260,7 @@ async def test_two_findings_on_the_same_line_each_get_their_own_comment():
     assert sorted(ids) == [8001, 8002]
 
 
-# ---------------------------------------------------------------------------
-# Suggested changes
-# ---------------------------------------------------------------------------
+# --- Suggested changes ---
 
 def test_a_suggestion_is_fenced_so_github_renders_the_apply_button():
     body = build_comment_body(make(suggestion="    return _USERS.get(user_id)"))

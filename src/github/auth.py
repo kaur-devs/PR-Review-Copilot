@@ -19,24 +19,19 @@ logger = logging.getLogger(__name__)
 
 GITHUB_API = "https://api.github.com"
 
-# GitHub asks for these on every request. The version header means our code
-# keeps working when they change the API for everybody else.
+# The version header keeps us working when the API changes for everyone else.
 API_HEADERS = {
     "Accept": "application/vnd.github+json",
     "X-GitHub-Api-Version": "2026-03-10",
 }
 
-# GitHub refuses a JWT that claims to last more than ten minutes. We ask for
-# nine, leaving room for our clock being slightly fast.
+# GitHub refuses a JWT over ten minutes; nine leaves room for clock drift.
 JWT_LIFETIME_SECONDS = 9 * 60
 
-# GitHub recommends backdating the start time by a minute, in case our clock
-# is slightly ahead of theirs. Without this, a token can be rejected as
-# "issued in the future".
+# Backdated a minute, or a fast clock gets the token rejected as future-dated.
 JWT_BACKDATE_SECONDS = 60
 
-# Installation tokens last an hour. We fetch a new one when under five minutes
-# remain, so a request never starts with a token that expires mid-flight.
+# Refreshed with five minutes left, so nothing starts on a token about to die.
 REFRESH_WHEN_UNDER = timedelta(minutes=5)
 
 
@@ -71,8 +66,7 @@ class InstallationToken:
         return datetime.now(timezone.utc) + REFRESH_WHEN_UNDER < self.expires_at
 
 
-# Kept per installation so a review does not re-sign and re-trade a token
-# on every single request.
+# Per installation, so a review does not re-trade a token on every request.
 _token_cache: dict[int, InstallationToken] = {}
 
 
@@ -104,8 +98,7 @@ async def fetch_installation_token(
         if we_made_the_client:
             await client.aclose()
 
-    # GitHub sends the expiry as text like "2026-09-27T17:00:00Z". The Z means
-    # UTC, which Python wants written as "+00:00".
+    # The trailing Z means UTC, which Python wants written as "+00:00".
     expires_at = datetime.fromisoformat(body["expires_at"].replace("Z", "+00:00"))
 
     logger.info(

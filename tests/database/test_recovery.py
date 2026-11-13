@@ -80,9 +80,7 @@ async def set_status(review_id: int, *, expected: str, new: str, **extra):
         )
 
 
-# ---------------------------------------------------------------------------
-# What has not changed
-# ---------------------------------------------------------------------------
+# --- What has not changed ---
 
 async def test_a_second_claim_on_a_live_review_is_still_refused():
     first, repo_id = await claim()
@@ -111,9 +109,7 @@ async def test_a_failed_review_is_not_quietly_retried():
         assert await claim_review(session, repo_id, EVENT) is None
 
 
-# ---------------------------------------------------------------------------
-# Taking over an abandoned review
-# ---------------------------------------------------------------------------
+# --- Taking over an abandoned review ---
 
 @pytest.mark.parametrize("stuck_in", ["received", "processing", "posting"])
 async def test_a_review_abandoned_in_any_unfinished_status_is_taken_over(stuck_in):
@@ -190,15 +186,12 @@ async def test_two_deliveries_arriving_together_cannot_both_take_over():
         one = await claim_review(session, repo_id, EVENT)
         two = await claim_review(session, repo_id, EVENT)
 
-    # The first takes it over, which resets updated_at, so the second finds
-    # nothing abandoned to take.
+    # The first resets updated_at, so the second finds nothing to take.
     assert one == first
     assert two is None
 
 
-# ---------------------------------------------------------------------------
-# Finding what got stuck, and rebuilding enough to start it again
-# ---------------------------------------------------------------------------
+# --- Finding what got stuck, and rebuilding enough to start it again ---
 
 async def stuck():
     async with get_session_factory()() as session:
@@ -281,9 +274,7 @@ async def test_the_oldest_comes_first():
     assert [s.review_id for s in await stuck()] == [first, second]
 
 
-# ---------------------------------------------------------------------------
-# Giving up on one that is out of attempts
-# ---------------------------------------------------------------------------
+# --- Giving up on one that is out of attempts ---
 
 @pytest.mark.parametrize("stuck_in", ["received", "processing", "posting"])
 async def test_a_review_can_be_abandoned_from_any_unfinished_status(stuck_in):
@@ -318,9 +309,7 @@ async def test_an_abandoned_review_stops_showing_up_as_stuck():
     assert await stuck() == []
 
 
-# ---------------------------------------------------------------------------
-# Picking them up on startup
-# ---------------------------------------------------------------------------
+# --- Picking them up on startup ---
 
 PATCH = make_patch(
     ["def get_user(user_id):", "    return _USERS[user_id]", ""],
