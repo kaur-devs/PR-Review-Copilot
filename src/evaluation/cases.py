@@ -7,9 +7,25 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class ExpectedFinding:
+    """One defect, and every place it is fair to report it.
+
+    A cross-file defect has two ends. A renamed key can be commented on
+    the rename or on the line that still reads the old name; an unguarded
+    parse on the function or on its caller. Scoring only one of them
+    counts a correct finding as both a miss and a false positive, which
+    understates recall and precision at the same time.
+    """
+
     file: str
     line: int
     note: str = ""
+
+    # Other anchors that mean the same defect, as (file, line).
+    also: tuple[tuple[str, int], ...] = ()
+
+    @property
+    def anchors(self) -> tuple[tuple[str, int], ...]:
+        return ((self.file, self.line), *self.also)
 
     def __str__(self) -> str:
         return f"{self.file}:{self.line} ({self.note})" if self.note else f"{self.file}:{self.line}"
@@ -49,6 +65,10 @@ def load_cases(path: Path) -> list[Case]:
                         file=item["file"],
                         line=int(item["line"]),
                         note=item.get("note", ""),
+                        also=tuple(
+                            (other["file"], int(other["line"]))
+                            for other in item.get("also", [])
+                        ),
                     )
                     for item in entry.get("expected", [])
                 ),

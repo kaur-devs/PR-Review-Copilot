@@ -5,6 +5,8 @@ Design note: docs/30_Design_Notes.md#src-agents-prompts
 
 from __future__ import annotations
 
+import hashlib
+
 from src.review.findings import CATEGORIES, SEVERITIES
 
 WRONG = "wrong"
@@ -195,3 +197,18 @@ def system_prompt(specialist: str) -> str:
     if focus is None:
         raise ValueError(f"no such specialist: {specialist!r}")
     return f"{SHARED}\n\n{focus}"
+
+
+def prompt_version() -> str:
+    """A short, stable id for the prompts this build reviews with.
+
+    Derived from the text rather than hand-maintained, because a version
+    number nobody remembers to bump is worse than none: it says a finding
+    came from a prompt that may not be the one that produced it. This
+    changes the moment any prompt does.
+    """
+    text = "".join(system_prompt(which) for which in SPECIALISTS)
+    return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+
+PROMPT_VERSION = prompt_version()

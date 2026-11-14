@@ -247,7 +247,7 @@ class LLMProvider:
             choice = body["choices"][0]
             message = choice["message"]
         except (KeyError, IndexError) as error:
-            raise InvalidResponse(f"unexpected response shape: {error}")
+            raise InvalidResponse(f"unexpected response shape: {error}") from error
 
         # content is null whenever a tool was asked for, which is not an error.
         text = message.get("content") or ""

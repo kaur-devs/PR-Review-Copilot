@@ -27,7 +27,7 @@ def read_json_object(answer: str) -> dict:
     try:
         value = json.loads(text[start:end + 1])
     except json.JSONDecodeError as error:
-        raise InvalidResponse(f"the answer is not valid JSON: {error}")
+        raise InvalidResponse(f"the answer is not valid JSON: {error}") from error
 
     if not isinstance(value, dict):
         raise InvalidResponse(f"the answer is a {type(value).__name__}, not an object")

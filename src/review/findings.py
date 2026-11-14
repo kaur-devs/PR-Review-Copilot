@@ -102,6 +102,13 @@ class Finding:
     # Gated harder than the comment: a wrong one is applied with a click.
     suggestion: str | None = None
 
+    # Where this came from. "Measured, not claimed" needs a finding to say
+    # which model and which prompt produced it, or no number quoted about
+    # the reviewer can be traced back to the thing that produced it.
+    model: str = ""
+    found_by: str = ""
+    prompt_version: str = ""
+
     @property
     def sort_key(self) -> tuple[int, float, str, int]:
         return (

@@ -12,6 +12,7 @@ from pathlib import Path
 from src.evaluation.cases import Case, load_cases
 from src.evaluation.score import CaseScore, RunScore, score_case
 from src.github.client import GitHubClient
+from src.pipeline.agentic import agentic_enabled, review_pull_request_with_agents
 from src.pipeline.single_pass import review_pull_request
 from src.webhooks.events import PullRequestEvent
 
@@ -55,9 +56,20 @@ async def _event_for(case: Case) -> PullRequestEvent:
 
 
 async def run_case(case: Case) -> CaseScore:
+    """Score one pull request through whichever pipeline is switched on.
+
+    This used to call the single-pass reviewer unconditionally, so the
+    harness measured a pipeline the service had stopped using. Every
+    number it produced described the wrong system.
+    """
+    review = (
+        review_pull_request_with_agents
+        if agentic_enabled()
+        else review_pull_request
+    )
     try:
         event = await _event_for(case)
-        outcome = await review_pull_request(event)
+        outcome = await review(event)
     except Exception as error:
         logger.exception("case %s failed", case.id)
         return CaseScore(case_id=case.id, error=str(error)[:200])
@@ -65,6 +77,8 @@ async def run_case(case: Case) -> CaseScore:
     score = score_case(case, outcome.findings, outcome.context)
     score.model_calls = outcome.model_calls
     score.seconds = outcome.seconds
+    score.prompt_tokens = outcome.prompt_tokens
+    score.completion_tokens = outcome.completion_tokens
     return score
 
 
@@ -194,7 +208,7 @@ async def main() -> int:
         out = args.out
         if out is None:
             stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M")
-            REPORTS.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(REPORTS.mkdir, parents=True, exist_ok=True)
             out = REPORTS / f"{stamp}-{'-'.join(args.only).lower()}.json"
 
         out.parent.mkdir(parents=True, exist_ok=True)

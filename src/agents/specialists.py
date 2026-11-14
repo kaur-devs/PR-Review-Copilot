@@ -8,11 +8,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from src.agents.answers import read_json_object
 from src.agents.loop import MAX_TURNS, AgentRun, run_agent
-from src.agents.prompts import ROBUST, SPECIALISTS, WRONG, system_prompt
+from src.agents.prompts import (
+    PROMPT_VERSION,
+    ROBUST,
+    SPECIALISTS,
+    WRONG,
+    system_prompt,
+)
 from src.agents.tools import SCHEMAS, Toolbox
 from src.common import trace
 from src.context.bundle import ContextBundle
@@ -158,7 +164,14 @@ async def _one_specialist(
             if isinstance(entry, dict):
                 trace.rejected(entry, reason)
             continue
-        kept.append(finding)
+        kept.append(
+            replace(
+                finding,
+                model=model.model,
+                found_by=which,
+                prompt_version=PROMPT_VERSION,
+            )
+        )
 
     return which, scope, run, kept, dropped
 

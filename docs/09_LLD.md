@@ -231,7 +231,7 @@ being slow to listen loses messages outright.
 
 ## 7. Testing
 
-625 tests, about 16 seconds. **No test reaches the network or the
+677 tests, about 19 seconds. **No test reaches the network or the
 development database.**
 
 | Folder | Needs | Count |

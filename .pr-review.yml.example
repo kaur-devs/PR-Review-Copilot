@@ -1,0 +1,19 @@
+# Settings for the PR Review Copilot, read from the repository it reviews.
+# Every field is optional; a missing or broken file means the defaults.
+
+# Only post findings this confident. Default 0.6.
+minimum_confidence: 0.6
+
+# Which severities reach the pull request. Adding "low" is how a team
+# asks to see everything; by default low findings are stored, not shown.
+severities: [high, medium]
+
+# Categories to leave alone entirely. One of: correctness, error_handling,
+# concurrency, security, breaking_change, performance, maintainability.
+ignore_categories: []
+
+# At most this many inline comments on one review. Can be lowered, not raised.
+max_comments: 25
+
+# Offer one-line fixes behind GitHub's Apply button.
+suggestions: true

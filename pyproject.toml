@@ -1,0 +1,14 @@
+[tool.ruff]
+line-length = 88
+target-version = "py314"
+
+[tool.ruff.lint]
+# The same rules the reviewer applies to other people's pull requests.
+# Curated rather than a whole ruleset: see src/analysis/lint.py for why
+# B008 and S105 are deliberately absent.
+select = ['F821', 'F811', 'F841', 'F502', 'F522', 'F632', 'E711', 'E712', 'E713', 'E714', 'B006', 'B012', 'B017', 'B023', 'B904', 'ASYNC', 'S608', 'S324', 'S501', 'PLE']
+
+[tool.ruff.lint.per-file-ignores]
+# A test that asserts a blind Exception is testing that anything at all
+# is raised, which is sometimes exactly the point.
+"tests/*" = ["B017"]

@@ -17,13 +17,16 @@
 2. Why a GitHub App instead of a personal access token?
 3. How does the provider adapter let you swap free-tier LLM providers without rearchitecting?
 4. Why Postgres over a document store here?
-5. Why no agent framework?
+5. Why LangGraph, having first decided against any agent framework? (ADR-011 supersedes ADR-002; the boundary is that LangGraph owns the flow between stages and our code owns everything inside one, including every HTTP call to a model.)
 6. How is the webhook verified?
 7. How is a duplicate webhook delivery handled?
 8. How would you scale this to more repos?
 9. How do you prevent false-positive fatigue?
 10. What does the judge pass actually check?
-11. How is model/prompt version tracked?
+11. How is model/prompt version tracked? (Per finding, with the prompt version hashed from the prompt text so it cannot go stale.)
+12. Why does the linter run a curated rule list rather than a whole ruleset?
+13. How can suppression measure rejection when GitHub never reports one?
+14. Why does an evaluation case allow a defect more than one anchor?
 12. How do you validate structured LLM output?
 13. How do you test the review pipeline?
 14. How do you handle LLM API failure?

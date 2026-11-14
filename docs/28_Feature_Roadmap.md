@@ -171,18 +171,23 @@ reduced confidence. Post them as questions instead. A wrong question costs
 nothing; a wrong assertion costs trust. Two lines of prompt, using a
 distinction already built.
 
-### Suppression, closed
+### ~~Suppression~~ — built
 
-`repo_suppressions` is a table nothing reads or writes. Count dismissals per
-repository and category, flip the flag past a threshold, check it in the gate,
-and announce it in the review body. A bot that notices it is being ignored and
-backs off is memorable.
+Done. A category goes quiet for a repository once ten findings in it have
+been posted and fewer than one in five were acted on. The `repo_suppressions`
+table this entry proposed was never the right shape and has been dropped;
+the query runs against `outcomes` and `findings` instead, because GitHub
+never reports a rejection and the denominator has to come from what was
+posted. See US-006.
 
-### Commands and configuration
+### Configuration — built. Commands — not.
 
-`@bot review again`, `@bot explain`, `@bot ignore <category>`, and a
-`.prreview.yml` for thresholds and path excludes. Table stakes for the
-category; their absence is noticed.
+`.pr-review.yml` in the repository under review sets severities, the
+confidence floor, categories to leave alone, and the comment cap.
+
+Commands are still missing: `@bot review again`, `@bot explain`,
+`@bot ignore <category>`. Every competitor has chat on the pull request,
+and its absence is noticed.
 
 ---
 

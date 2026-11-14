@@ -1,0 +1,47 @@
+{
+  "runs": [
+    {
+      "label": "H0 full pipeline",
+      "recall": 0.375,
+      "precision": 0.6666666666666666,
+      "f1": 0.4800000000000001,
+      "context_recall": 0.5,
+      "model_calls": 118,
+      "errors": 0,
+      "cases": [
+        {
+          "id": "flagpole-scheduled-rollouts",
+          "matched": 6,
+          "missed": [
+            "backend/app/routers/evaluate.py:65 (X2 is_member called with its arguments transposed)",
+            "backend/app/services/segments.py:14 (X3 any() where the docstring and the README both say all)",
+            "backend/app/routers/flags.py:93 (S1 schedule_change has no require_admin; its two siblings do)",
+            "backend/app/routers/flags.py:101 (S2 looked up by key alone, never scoped to the project)",
+            "backend/app/services/schedule.py:40 (C1/C2 the ramp applies once and compounds from the live value, so ramp_minutes never ramps)",
+            "backend/app/services/schedule.py:21 (C3 int(elapsed) truncates, nothing moves in the first minute)",
+            "backend/app/services/schedule.py:27 (C4 changes applied in arbitrary order, no ORDER BY apply_at)",
+            "frontend/src/api.ts:72 (C6 scheduleChange omits adminHeaders(); createFlag includes it)",
+            "frontend/src/api.ts:85 (M1 as any reads a field types.ts does not declare)",
+            "frontend/src/components/ScheduleBadge.tsx:28 (M2 array index as a React key on a sorted, filtered list)"
+          ],
+          "extra": [
+            "frontend/src/hooks/useSchedule.ts:9 Promise rejection from listSchedules is not caught, causing an unhandled rejection",
+            "frontend/src/api.ts:63 New async function scheduleChange is not covered by any test",
+            "frontend/src/api.ts:79 New async function listSchedules is not covered by any test"
+          ],
+          "context_found": [
+            "frontend/src/types.ts",
+            "frontend/src/components/FlagRow.tsx"
+          ],
+          "context_missed": [
+            "backend/app/services/segments.py",
+            "backend/app/auth.py"
+          ],
+          "model_calls": 118,
+          "seconds": 41.6,
+          "error": null
+        }
+      ]
+    }
+  ]
+}

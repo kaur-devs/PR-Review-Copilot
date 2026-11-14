@@ -180,8 +180,6 @@ async def test_the_comment_ids_are_fetched_afterwards():
 
 async def test_comments_from_another_review_are_not_claimed():
     """Several reviews can exist on one pull request."""
-    import httpx
-
     from src.github.review import fetch_posted_comments
     from tests.fakes import token_response
 

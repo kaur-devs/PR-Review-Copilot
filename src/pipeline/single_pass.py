@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from src.classification.classify import classify
 from src.classification.kinds import Classification
 from src.common import trace
+from src.config_file import RepoConfig
 from src.context.bundle import ContextBundle
 from src.context.gather import gather_context
 from src.diff.parse import FileDiff
@@ -44,8 +45,13 @@ class ReviewOutcome:
     suggestions: SuggestionOutcome = field(default_factory=SuggestionOutcome)
     skipped_files: dict[str, str] = field(default_factory=dict)
     model_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
     seconds: float = 0.0
     skipped: str | None = None
+
+    # What the repository under review asked for.
+    repo_config: RepoConfig = field(default_factory=RepoConfig)
 
     # Filled in by the agentic pipeline only.
     summary: str = ""
@@ -204,6 +210,8 @@ async def review_pull_request(
     outcome.summary = await _write_summary(outcome, llm_client)
 
     outcome.model_calls = quota.requests - calls_before
+    outcome.prompt_tokens = quota.prompt_tokens
+    outcome.completion_tokens = quota.completion_tokens
     outcome.seconds = time.monotonic() - started
     return outcome
 

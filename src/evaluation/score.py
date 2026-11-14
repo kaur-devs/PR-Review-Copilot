@@ -19,6 +19,8 @@ class CaseScore:
     context_found: list[str] = field(default_factory=list)
     context_missed: list[str] = field(default_factory=list)
     model_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
     seconds: float = 0.0
     error: str | None = None
 
@@ -39,9 +41,10 @@ class CaseScore:
 
 
 def _same_place(expected: ExpectedFinding, finding: Finding) -> bool:
-    return (
-        expected.file == finding.file
-        and abs(expected.line - finding.line) <= LINE_WINDOW
+    """Whether a finding lands on any end of this defect."""
+    return any(
+        file == finding.file and abs(line - finding.line) <= LINE_WINDOW
+        for file, line in expected.anchors
     )
 
 

@@ -173,6 +173,8 @@ has no natural stopping point.
 | repeats | before verification | anything posted on an earlier commit |
 | severity | before verification | low severity, which can never post |
 | confidence | after verification | below 0.6, the score the judge just moved |
+| repository settings | after the gates | severities and categories this repository switched off |
+| suppression | after the gates | categories this repository has stopped acting on |
 
 Repeats and severity run first so nothing is ever verified that could not be
 posted. Repeats run *after* the gate rather than before, because a finding
@@ -203,16 +205,31 @@ settled:
 - **It predates the token reservation** in `src/llm/budget.py`, which should
   cut the waiting sharply. Re-measure before trusting any of it.
 
-`src/agents/measure.py` exists to produce these numbers but currently
-bypasses the graph, so it undercounts. Fix it before the next measurement.
+`src/agents/measure.py` calls the specialists directly and counts turns.
+It still reports turn-level detail the harness does not, but it is no
+longer where pipeline numbers come from: `src/evaluation/run.py` runs the
+agentic pipeline end to end and reports recall, precision, F1, calls and
+tokens against labelled defects. It called the single-pass reviewer
+unconditionally until recently, which is why every earlier figure
+described a pipeline the service had stopped using.
+
+```bash
+AGENTIC_PIPELINE=1 .venv/bin/python -m src.evaluation.run \
+    --case flagpole-scheduled-rollouts --only H0
+```
 
 ## What is not built
 
 - **A fixer agent.** Suggestions come from the generating model as a
   replacement line, gated at 0.8 confidence and checked by compiling the
-  file. No separate agent writes them.
-- **Suppression.** Learning that a repository dismisses a category and
-  falling silent on it.
+  file. No separate agent writes them, and none will: autofix is out of
+  scope by principle.
+- **A pre-built graph of the repository.** Cross-file questions are
+  answered by an agent choosing to grep at review time. It works — the
+  rename of a key read by two files outside the diff has been caught,
+  naming both — but five runs on identical input caught it in three. An
+  index would make it consistent. That is the clearest architectural gap,
+  and the one too large for the time left.
 
 ## Decisions
 

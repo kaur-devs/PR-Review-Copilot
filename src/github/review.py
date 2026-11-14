@@ -139,12 +139,14 @@ async def post_review(
     *,
     held_back: int = 0,
     summary: str = "",
+    max_comments: int = MAX_COMMENTS_PER_REVIEW,
 ) -> PostedReview:
-    to_post = findings[:MAX_COMMENTS_PER_REVIEW]
-    if len(findings) > MAX_COMMENTS_PER_REVIEW:
+    cap = min(max_comments, MAX_COMMENTS_PER_REVIEW)
+    to_post = findings[:cap]
+    if len(findings) > cap:
         logger.warning(
             "only posting %s of %s findings, the rest would be noise",
-            MAX_COMMENTS_PER_REVIEW,
+            cap,
             len(findings),
         )
 

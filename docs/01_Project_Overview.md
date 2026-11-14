@@ -15,7 +15,20 @@ PR Review Copilot is an end-to-end AI code review system that reads a pull reque
 The platform is intentionally designed as a **review-support system, not an autonomous merge gate**. A human developer remains responsible for the final decision to merge.
 
 ## Core Product Flow
-PR opened/updated → webhook received → diff fetched → connected-file context gathered → change classified → task-decomposed review generated → judge/grounding pass → confidence/dedup filter → severity-gated comments posted → outcome captured → (v2) per-repo tuning.
+PR opened or updated → webhook verified and the commit claimed → diff
+fetched and parsed → repository snapshot downloaded → change classified →
+triage picks which reviewers to wake → **one agent per changed file, per
+reviewer, each able to grep and read the repository while it decides** →
+a linter pass on the same changed lines → repeats dropped → severity gate
+→ verification by a second model from a different family → confidence
+gate → the repository's own settings and any suppressed categories →
+severity-gated inline comments posted → outcome captured.
+
+The single-pass version of this flow — classify, generate, judge, filter
+— still exists and is what the pipeline falls back to. It was replaced as
+the default because it could not find a defect whose two ends sat in
+different files: the context it needed had to be chosen before anyone
+knew what the bug was.
 
 ## MVP
 1. GitHub App installable on a repo.
@@ -29,10 +42,14 @@ PR opened/updated → webhook received → diff fetched → connected-file conte
 9. Evaluation harness (recall / false-positive rate on real historical PRs).
 
 ## Out of Scope for MVP
-- Autofix / one-click apply.
+- Autofix, merging or blocking — out of scope by principle, not by effort.
 - Multi-platform support (GitLab, Bitbucket, Azure DevOps).
-- Custom team rules / compliance configuration UI.
-- Dedicated security-scanning pillar (SAST).
+- A configuration UI. Settings are a file in the repository instead.
+- A dedicated SAST pillar. A curated linter pass runs, chosen rule by
+  rule; a full security scanner is not in scope.
 - IDE integration.
 - Training or fine-tuning a model.
-- Full-codebase graph indexing (v1 uses targeted search, not a full graph).
+- Full-codebase graph indexing. Cross-file questions are answered by an
+  agent at review time rather than by a pre-built index — the trade is
+  flexibility against consistency, and the inconsistency is measurable.
+- Chat on the pull request.

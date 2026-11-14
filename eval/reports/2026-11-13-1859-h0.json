@@ -1,0 +1,47 @@
+{
+  "runs": [
+    {
+      "label": "H0 full pipeline",
+      "recall": 0.35294117647058826,
+      "precision": 0.6666666666666666,
+      "f1": 0.46153846153846156,
+      "context_recall": 0.0,
+      "model_calls": 125,
+      "errors": 0,
+      "cases": [
+        {
+          "id": "flagpole-scheduled-rollouts",
+          "matched": 6,
+          "missed": [
+            "backend/app/routers/flags.py:101 (S2 flag looked up by key alone, never scoped to project_key)",
+            "backend/app/services/schedule.py:41 (C1 applied set after one step, so ramp_minutes never ramps)",
+            "backend/app/services/schedule.py:40 (C2 started_from is the live value, so the ramp compounds)",
+            "backend/app/services/schedule.py:21 (C3 int(elapsed) truncates, nothing moves in the first minute)",
+            "backend/app/services/schedule.py:27 (C4 changes applied in arbitrary order, no ORDER BY apply_at)",
+            "frontend/src/hooks/useSchedule.ts:17 (C5 [0]! asserts non-null on a filtered array that can be empty)",
+            "frontend/src/api.ts:72 (C6 scheduleChange omits adminHeaders(); createFlag includes it)",
+            "backend/app/routers/flags.py:107 (E1 parse_apply_at unguarded, ValueError becomes a 500)",
+            "frontend/src/hooks/useSchedule.ts:9 (E2 .then with no .catch, loading stays true forever)",
+            "backend/app/routers/evaluate.py:42 (P1 segment query inside the per-flag loop, N+1 on the hot path)",
+            "frontend/src/components/ScheduleBadge.tsx:28 (M2 array index as a React key on a sorted, filtered list)"
+          ],
+          "extra": [
+            "backend/app/services/schedule.py:48 parse_apply_at can raise an uncaught ValueError for malformed ISO strings, causing a 500 error.",
+            "frontend/src/components/ScheduleBadge.tsx:24 `next` may be undefined, causing a runtime crash when accessing its properties.",
+            "backend/app/services/schedule.py:32 apply_due_changes can process the same ScheduledChange concurrently in multiple workers, leading to duplicate application."
+          ],
+          "context_found": [],
+          "context_missed": [
+            "frontend/src/types.ts",
+            "frontend/src/components/FlagRow.tsx",
+            "backend/app/services/segments.py",
+            "backend/app/auth.py"
+          ],
+          "model_calls": 125,
+          "seconds": 40.7,
+          "error": null
+        }
+      ]
+    }
+  ]
+}

@@ -52,7 +52,23 @@ Four kinds of model call, in increasing cost:
 | Cheap verification | no | no |
 | Specialist, agentic verification | yes | yes |
 
-Triage makes no call at all: it reads labels the classifier already produced.
+Triage makes no call at all: it reads labels the classifier already
+produced. Neither does the linter pass, which runs beside the specialists.
+
+**A linter first, on rules chosen by what they cost.** The cheap, certain
+half of the job should not be paid for in tokens. Enabling a ruleset
+wholesale was tried first and was worse than nothing: ruff's default
+bugbear and bandit sets produced seven findings on a test pull request and
+every one was wrong in context — `B008` fires on `Depends()` in an
+argument default, which is how FastAPI is written, and `S105` calls a
+placeholder constant a hardcoded password.
+
+So the selector is curated and a rule earns its place empirically: it must
+fire on real defects and stay silent on three working codebases. What
+survives catches a mutable default argument and a blocking `sleep` inside
+an async function, finds nothing on any of the three, and costs nothing.
+Its findings go through the same gates and the same verifier as the
+model's. Nothing is trusted more for being mechanical.
 
 ## Why a loop, and only where it pays
 

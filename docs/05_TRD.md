@@ -64,10 +64,12 @@ to use no framework at all.
 | TR-012 | Per-model token budgets, reserved before sending | built |
 | TR-013 | Resume a review interrupted by a restart | built |
 | TR-014 | Retire a review when a newer commit arrives | built |
-| TR-015 | Multi-language parsing: Python, JS, TS, TSX | built, not evaluated |
+| TR-015 | Multi-language parsing: Python, JS, TS, TSX | built, evaluated |
 | TR-016 | Deployment GitHub can reach | **not built** |
-| TR-017 | Per-repository suppression from outcomes | **not built** |
-| TR-018 | Per-repository configuration file | **not built** |
+| TR-017 | Per-repository suppression from outcomes | built |
+| TR-018 | Per-repository configuration file | built |
+| TR-019 | Linter pass on changed lines, before the model | built |
+| TR-020 | Model, prompt version and cost recorded per finding | built |
 
 ## Non-functional targets
 
@@ -84,7 +86,23 @@ any thinking. It is a tier limit, not a code limit — the same review on a
 paid tier fits inside one minute's budget. Stated rather than quietly
 dropped.
 
-**Not met: provenance.** Nothing records which model or prompt version
-produced a finding. The `findings` table has no column for it, so a result
-cannot be traced back to what generated it. For a project whose argument is
-"measured, not claimed", that is the most important of these gaps.
+**Provenance.** Every finding records the model that produced it, a
+`prompt_version` derived from the prompt text itself, and which specialist
+or the linter found it. Every review records its model calls, prompt and
+completion tokens, and seconds. The prompt version is a hash rather than a
+hand-maintained number, because a version nobody remembers to bump is worse
+than none: it claims a finding came from a prompt that may not be the one
+that produced it.
+
+**Measured.** On the flagpole case — 246 lines, 8 files, Python and TSX, 16
+labelled defects and five deliberate false-positive baits — the harness
+reports **56% recall, 82% precision, 67% F1** through the agentic pipeline.
+Reproduce it with:
+
+```bash
+AGENTIC_PIPELINE=1 .venv/bin/python -m src.evaluation.run \
+    --case flagpole-scheduled-rollouts --only H0
+```
+
+Earlier numbers quoted in this project came from reading logs. This one does
+not.

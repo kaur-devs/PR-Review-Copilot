@@ -303,8 +303,12 @@ async def store_findings(session: AsyncSession, review_id: int, findings) -> int
             line=finding.line,
             severity=finding.severity,
             category=finding.category,
+            message=finding.message,
             rationale=finding.rationale or finding.message,
             confidence=finding.confidence,
+            model=finding.model or None,
+            prompt_version=finding.prompt_version or None,
+            found_by=finding.found_by or None,
             posted=False,
         )
         for finding in findings
@@ -480,3 +484,30 @@ async def reopen_review(session: AsyncSession, review_id: int) -> bool:
     )
     await session.commit()
     return result.rowcount == 1
+
+
+async def record_cost(session: AsyncSession, review_id: int, outcome) -> None:
+    """What this review spent, on the review row rather than in a log line.
+
+    The quota analysis claims requests-per-review is a query. It was not:
+    the counter lived in memory and was reset by the next process. This is
+    what makes the claim true.
+    """
+    await session.execute(
+        update(Review)
+        .where(Review.id == review_id)
+        .values(
+            model_calls=outcome.model_calls,
+            prompt_tokens=outcome.prompt_tokens,
+            completion_tokens=outcome.completion_tokens,
+            seconds=round(outcome.seconds, 1),
+        )
+    )
+    await session.commit()
+
+
+async def repo_of(session: AsyncSession, review_id: int) -> int | None:
+    """Which repository this review belongs to."""
+    return await session.scalar(
+        select(Review.repo_id).where(Review.id == review_id)
+    )

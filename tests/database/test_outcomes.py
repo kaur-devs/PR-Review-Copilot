@@ -221,3 +221,53 @@ def test_a_thread_about_comments_we_did_not_write_is_ignored(client):
 
     assert response.status_code == 200
     assert response.json()["status"] == "ignored"
+
+
+
+# ------------------------------------------------------- what produced it
+
+async def test_a_finding_records_the_model_and_prompt_that_produced_it():
+    """Every quality number this project has quoted came from reading a
+    log. Without these columns a recall figure cannot be traced back to
+    the model and prompt that produced it, and "measured, not claimed" is
+    a slogan rather than a property."""
+    from src.agents.prompts import PROMPT_VERSION, WRONG
+
+    async with get_session_factory()() as session:
+        repo_id = await ensure_repo(session, EVENT)
+        review_id = await claim_review(session, repo_id, EVENT)
+        await store_findings(session, review_id, [Finding(
+            file="app/models.py", line=10, severity="high",
+            category="correctness", message="charge gained a parameter",
+            rationale="app/orders.py:4 calls it with one argument",
+            confidence=0.9, model="openai/gpt-oss-120b",
+            found_by=WRONG, prompt_version=PROMPT_VERSION,
+        )])
+
+        stored = (await session.execute(select(FindingRow))).scalars().one()
+        assert stored.model == "openai/gpt-oss-120b"
+        assert stored.prompt_version == PROMPT_VERSION
+        assert stored.found_by == WRONG
+        assert stored.message == "charge gained a parameter"
+
+
+async def test_a_review_records_what_it_cost():
+    """The quota analysis claims requests-per-review is a query rather
+    than an estimate. Until now the counter lived in memory and the next
+    process reset it."""
+    from src.db.models import Review
+    from src.db.queries import record_cost
+    from src.pipeline.single_pass import ReviewOutcome
+
+    async with get_session_factory()() as session:
+        repo_id = await ensure_repo(session, EVENT)
+        review_id = await claim_review(session, repo_id, EVENT)
+        await record_cost(session, review_id, ReviewOutcome(
+            model_calls=108, prompt_tokens=96_451,
+            completion_tokens=4_210, seconds=43.84,
+        ))
+
+        row = await session.get(Review, review_id)
+        assert row.model_calls == 108
+        assert row.prompt_tokens == 96_451
+        assert row.seconds == 43.8

@@ -125,6 +125,14 @@ class Review(Base):
 
     github_review_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
+    # What the review cost. Previously these lived in a process-global
+    # counter and a log line, so "requests per review" was an estimate
+    # rather than the query the quota analysis says it is.
+    model_calls: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -195,10 +203,21 @@ class Finding(Base):
     severity: Mapped[str] = mapped_column(String(32))
     category: Mapped[str] = mapped_column(String(64))
 
+    # The sentence the developer actually read. Stored beside the reasoning
+    # rather than folded into it, so a finding can still be understood after
+    # the fact without guessing which half of the column it was.
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
     rationale: Mapped[str] = mapped_column(Text)
 
     # Kept below the threshold but never posted, so it can be retuned later.
     confidence: Mapped[float] = mapped_column(Float)
+
+    # Which model, which prompt, which reviewer. Without these, a recall or
+    # precision number cannot be traced to what produced it, and "measured,
+    # not claimed" is just a slogan.
+    model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    found_by: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     posted: Mapped[bool] = mapped_column(Boolean, default=False)
 
@@ -234,4 +253,66 @@ class Outcome(Base):
 
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class SymbolReference(Base):
+    """One name, in one file, at one line.
+
+    Not an edge in a graph: nothing here claims that two rows with the
+    same name refer to the same thing. The index proposes candidates and
+    the agents, which already read the files and are already checked by a
+    verifier, decide whether a candidate means anything.
+
+    That is the trade. A resolver would have to prove which definition a
+    call points at, across imports, aliases and re-exports, in every
+    language separately — and would still not connect a Python response
+    key to the TypeScript property that reads it, because no relationship
+    exists between them to resolve. A word in common is the only thing
+    those two have, and it is enough to put the right file in front of a
+    model.
+    """
+
+    __tablename__ = "symbol_references"
+    __table_args__ = (
+        # The lookup: every file mentioning a name this diff changed.
+        Index("ix_symbol_references_name", "repo_id", "name"),
+        # The update: every row for a file, so a changed file can be
+        # replaced wholesale. Without this the per-review delete scans
+        # every row the repository has, which is the cost the index
+        # exists to remove.
+        Index("ix_symbol_references_file", "repo_id", "file_path"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    repo_id: Mapped[int] = mapped_column(
+        ForeignKey("repos.id", ondelete="CASCADE")
+    )
+
+    name: Mapped[str] = mapped_column(String(255))
+    file_path: Mapped[str] = mapped_column(String(1024))
+    line: Mapped[int] = mapped_column(Integer)
+
+    # definition, key, property or call. Ranks a candidate; a definition
+    # is worth more than a mention.
+    kind: Mapped[str] = mapped_column(String(16))
+
+    # Kept to rank with, never to filter on. A Python file cannot call a
+    # TypeScript function, but it can absolutely hand it a dictionary.
+    language: Mapped[str] = mapped_column(String(16))
+
+
+class RepositoryIndex(Base):
+    """Whether a repository's index exists, and what it was built from."""
+
+    __tablename__ = "repository_indexes"
+
+    repo_id: Mapped[int] = mapped_column(
+        ForeignKey("repos.id", ondelete="CASCADE"), primary_key=True
+    )
+    head_sha: Mapped[str] = mapped_column(String(40))
+    files: Mapped[int] = mapped_column(Integer, default=0)
+    names: Mapped[int] = mapped_column(Integer, default=0)
+    built_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

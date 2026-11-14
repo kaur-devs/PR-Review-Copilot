@@ -137,13 +137,16 @@ completion tokens, retries and seconds spent waiting. The pipelines read it
 before and after a review to report model calls, and the evaluation harness
 writes per-case figures to its JSON report.
 
-**It is a process-global in memory.** Nothing is written to Postgres: neither
-`reviews` nor `findings` has a column for tokens, calls, model or prompt
-version, and there is no `/quota-report` endpoint. Restart the service and the
-history is gone.
+It is still a process-global in memory, but it is no longer the only copy.
+Each review now writes its `model_calls`, `prompt_tokens`,
+`completion_tokens` and `seconds` to its own row, and each finding records
+the model and prompt version that produced it. Cost per review is a query:
 
-So cost per review is something this project has *measured* — once, by
-reading a log — not something it can *query*. For a project whose stated
-principle is "measured, not claimed", that is the gap worth closing first, and
-it is the same missing column as the provenance gap named in the technical
-requirements.
+```sql
+SELECT avg(model_calls), avg(prompt_tokens + completion_tokens), avg(seconds)
+FROM reviews WHERE status = 'posted';
+```
+
+There is still no `/quota-report` endpoint; the numbers are read with SQL.
+That is adequate for one developer and not for anyone else, which is the
+honest reason it is absent rather than a decision that it is unnecessary.

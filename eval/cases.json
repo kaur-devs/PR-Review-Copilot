@@ -1,6 +1,147 @@
 {
   "cases": [
     {
+      "id": "flagpole-scheduled-rollouts",
+      "repo": "kaur-devs/PR-Review-Testing-",
+      "pr": 5,
+      "installation_id": 166408152,
+      "note": "Clean base, 246 lines across 8 files, Python API and TSX dashboard. 17 planted defects with five deliberate false-positive baits; full ground truth in eval/planted/flagpole_schedules.md. The first case that is not Python-only.",
+      "expected": [
+        {
+          "file": "backend/app/routers/flags.py",
+          "line": 29,
+          "note": "X1 rollout_percent renamed to rollout; types.ts and FlagRow.tsx are not in the diff"
+        },
+        {
+          "file": "backend/app/routers/evaluate.py",
+          "line": 65,
+          "also": [
+            {
+              "file": "backend/app/services/segments.py",
+              "line": 5
+            }
+          ],
+          "note": "X2 is_member called with its arguments transposed"
+        },
+        {
+          "file": "backend/app/services/segments.py",
+          "line": 14,
+          "also": [
+            {
+              "file": "backend/app/services/segments.py",
+              "line": 10
+            }
+          ],
+          "note": "X3 any() where the docstring and the README both say all"
+        },
+        {
+          "file": "backend/app/routers/flags.py",
+          "line": 93,
+          "note": "S1 schedule_change has no require_admin; its two siblings do"
+        },
+        {
+          "file": "backend/app/routers/flags.py",
+          "line": 101,
+          "also": [
+            {
+              "file": "backend/app/routers/evaluate.py",
+              "line": 61
+            }
+          ],
+          "note": "S2 looked up by key alone, never scoped to the project"
+        },
+        {
+          "file": "backend/app/services/schedule.py",
+          "line": 40,
+          "note": "C1/C2 the ramp applies once and compounds from the live value, so ramp_minutes never ramps"
+        },
+        {
+          "file": "backend/app/services/schedule.py",
+          "line": 21,
+          "note": "C3 int(elapsed) truncates, nothing moves in the first minute"
+        },
+        {
+          "file": "backend/app/services/schedule.py",
+          "line": 27,
+          "note": "C4 changes applied in arbitrary order, no ORDER BY apply_at"
+        },
+        {
+          "file": "frontend/src/hooks/useSchedule.ts",
+          "line": 17,
+          "also": [
+            {
+              "file": "frontend/src/components/ScheduleBadge.tsx",
+              "line": 24
+            }
+          ],
+          "note": "C5 [0]! asserts non-null on a filtered array that can be empty"
+        },
+        {
+          "file": "frontend/src/api.ts",
+          "line": 72,
+          "note": "C6 scheduleChange omits adminHeaders(); createFlag includes it"
+        },
+        {
+          "file": "backend/app/routers/flags.py",
+          "line": 107,
+          "also": [
+            {
+              "file": "backend/app/services/schedule.py",
+              "line": 48
+            }
+          ],
+          "note": "E1 parse_apply_at unguarded, ValueError becomes a 500"
+        },
+        {
+          "file": "frontend/src/hooks/useSchedule.ts",
+          "line": 9,
+          "also": [
+            {
+              "file": "frontend/src/components/ScheduleBadge.tsx",
+              "line": 17
+            }
+          ],
+          "note": "E2 .then with no .catch, loading stays true forever"
+        },
+        {
+          "file": "backend/app/routers/flags.py",
+          "line": 118,
+          "also": [
+            {
+              "file": "backend/app/services/schedule.py",
+              "line": 32
+            },
+            {
+              "file": "backend/app/services/schedule.py",
+              "line": 27
+            }
+          ],
+          "note": "CC1 apply_due_changes reads then writes with no locking"
+        },
+        {
+          "file": "backend/app/routers/evaluate.py",
+          "line": 42,
+          "note": "P1 segment query inside the per-flag loop, N+1 on the hot path"
+        },
+        {
+          "file": "frontend/src/api.ts",
+          "line": 85,
+          "note": "M1 as any reads a field types.ts does not declare"
+        },
+        {
+          "file": "frontend/src/components/ScheduleBadge.tsx",
+          "line": 28,
+          "note": "M2 array index as a React key on a sorted, filtered list"
+        }
+      ],
+      "expected_context": [
+        "frontend/src/types.ts",
+        "frontend/src/components/FlagRow.tsx",
+        "backend/app/services/segments.py",
+        "backend/app/auth.py"
+      ]
+    },
+    {
       "id": "retriever-renamed-keys",
       "repo": "kaur-devs/codebase-chat",
       "pr": 7,

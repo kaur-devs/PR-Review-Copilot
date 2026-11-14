@@ -1,0 +1,42 @@
+{
+  "runs": [
+    {
+      "label": "H0 full pipeline",
+      "recall": 0.5625,
+      "precision": 0.8181818181818182,
+      "f1": 0.6666666666666666,
+      "context_recall": 0.0,
+      "model_calls": 105,
+      "errors": 0,
+      "cases": [
+        {
+          "id": "flagpole-scheduled-rollouts",
+          "matched": 9,
+          "missed": [
+            "backend/app/services/segments.py:14 (X3 any() where the docstring and the README both say all)",
+            "backend/app/routers/flags.py:101 (S2 looked up by key alone, never scoped to the project)",
+            "backend/app/services/schedule.py:40 (C1/C2 the ramp applies once and compounds from the live value, so ramp_minutes never ramps)",
+            "frontend/src/api.ts:72 (C6 scheduleChange omits adminHeaders(); createFlag includes it)",
+            "backend/app/routers/flags.py:118 (CC1 apply_due_changes reads then writes with no locking)",
+            "backend/app/routers/evaluate.py:42 (P1 segment query inside the per-flag loop, N+1 on the hot path)",
+            "frontend/src/components/ScheduleBadge.tsx:28 (M2 array index as a React key on a sorted, filtered list)"
+          ],
+          "extra": [
+            "backend/app/services/schedule.py:49 parse_apply_at does not handle invalid ISO format strings, raising uncaught ValueError",
+            "frontend/src/hooks/useSchedule.ts:9 Promise rejection from listSchedules is not caught, leading to unhandled errors"
+          ],
+          "context_found": [],
+          "context_missed": [
+            "frontend/src/types.ts",
+            "frontend/src/components/FlagRow.tsx",
+            "backend/app/services/segments.py",
+            "backend/app/auth.py"
+          ],
+          "model_calls": 105,
+          "seconds": 38.3,
+          "error": null
+        }
+      ]
+    }
+  ]
+}

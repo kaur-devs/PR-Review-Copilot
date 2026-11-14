@@ -322,7 +322,7 @@ async def test_a_resumed_run_does_not_repeat_the_specialists(box):
     calls_first_time = len(sent)
 
     # Resuming a finished thread replays nothing: the stages are done.
-    async with LLMProvider(api_key="k", client=client) as model:
+    async with LLMProvider(api_key="k", client=client):
         state = graph.get_state({"configurable": {"thread_id": "t1"}})
 
     assert state.next == ()

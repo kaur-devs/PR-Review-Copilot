@@ -5,14 +5,18 @@ import logging
 from src.common import trace
 from src.db.queries import (
     previously_posted,
+    repo_of,
     record_posted_review,
     set_review_status,
     start_attempt,
+    record_cost,
     store_findings,
 )
 from src.db.session import get_session_factory
 from src.filter.gate import GateResult, apply_gate
 from src.filter.repeat import drop_repeats
+from src.filter.suppress import apply as suppress
+from src.filter.suppress import suppressed_categories
 from src.github.client import GitHubClient
 from src.github.review import post_review
 from src.pipeline.agentic import agentic_enabled, review_pull_request_with_agents
@@ -154,6 +158,7 @@ async def _record_and_post(
 
     async with get_session_factory()() as session:
         stored = await store_findings(session, review_id, outcome.findings)
+        await record_cost(session, review_id, outcome)
     logger.info("review %s: %s findings stored", review_id, stored)
 
     # The graph gates in its own order; re-running would double-count holds.
@@ -163,9 +168,37 @@ async def _record_and_post(
         else apply_gate(outcome.findings)
     )
 
-    trace.section("GATE", f"{len(gate.post)} to post · {len(gate.hold)} held back")
+    # What this repository has stopped acting on. After the gates, so a
+    # category is judged on what was actually shown to somebody.
+    async with get_session_factory()() as session:
+        quiet = await suppressed_categories(session, await repo_of(session, review_id))
+    worth_posting, ignored = suppress(gate.post, quiet)
+
+    # Categories the repository asked us not to raise at all. Separate
+    # from suppression: one is what the team said, the other is what the
+    # team did.
+    settings = outcome.repo_config
+    if settings.ignore_categories:
+        worth_posting, muted = suppress(
+            worth_posting,
+            {
+                category: "this repository switched the category off"
+                for category in settings.ignore_categories
+            },
+        )
+        ignored += muted
+
+    trace.section(
+        "GATE",
+        f"{len(worth_posting)} to post · {len(gate.hold)} held back"
+        + (f" · {len(ignored)} in categories this repo ignores" if ignored else ""),
+    )
     for finding, reason in gate.hold:
         trace.item(f"held  {finding.file}:{finding.line}  ({reason})")
+    for finding, reason in ignored:
+        trace.item(f"quiet  {finding.file}:{finding.line}  ({reason})")
+
+    gate = GateResult(post=worth_posting, hold=gate.hold + ignored)
 
     if not gate.post:
         done(f"DONE  ·  {stored} findings, none worth posting")
@@ -204,6 +237,7 @@ async def _record_and_post(
                 github, event.repo_full_name, event.pr_number, event.head_sha,
                 repeated.fresh, held_back=len(gate.hold),
                 summary=outcome.summary,
+                max_comments=settings.max_comments,
             )
     except Exception:
         logger.exception("review %s could not be posted", review_id)

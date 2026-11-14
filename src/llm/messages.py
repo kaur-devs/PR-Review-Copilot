@@ -35,7 +35,7 @@ class ToolCall:
         except json.JSONDecodeError as error:
             raise InvalidResponse(
                 f"{self.name} was called with arguments that are not JSON: {error}"
-            )
+            ) from error
         if not isinstance(value, dict):
             raise InvalidResponse(f"{self.name} was called with {type(value).__name__}")
         return value
@@ -66,7 +66,9 @@ class Completion:
         try:
             return json.loads(self.text)
         except json.JSONDecodeError as error:
-            raise InvalidResponse(f"the model did not return valid JSON: {error}")
+            raise InvalidResponse(
+                f"the model did not return valid JSON: {error}"
+            ) from error
 
     def as_message(self) -> dict:
         """The assistant turn, ready to append to the conversation.

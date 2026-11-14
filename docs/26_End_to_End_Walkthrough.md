@@ -402,8 +402,10 @@ correctness problem, not a slow one.
 **How I will handle it.** A scheduled ping to keep it awake, and a scan that
 finds pull requests with no review and picks them up.
 
-**What I will use.** Render's free tier for the service, Neon's free
-PostgreSQL for the database. Neon rather than Render's own free database,
+**What I intended to use, and have not.** Nothing is deployed. The plan
+was Render's free tier for the service and Neon's free PostgreSQL for the
+database — Neon is in use, Render is not. Neon rather than Render's own
+free database,
 because that one deletes itself after thirty days and the project runs eight
 weeks.
 
@@ -423,7 +425,7 @@ weeks.
 | `alembic` | Schema changes |
 | `pydantic` | Checking model output has the right shape |
 | `pytest` | Tests |
-| PostgreSQL, Neon, Render | Storage and hosting |
+| PostgreSQL, Neon | Storage (hosting: not built) |
 | A free-tier model provider | The review itself |
 
 ---
@@ -436,11 +438,15 @@ touch the network or the development database.
 
 **Not started:** deployment.
 
-**Measured rather than assumed:** three consecutive evaluation runs on
-identical input gave F1 of 74%, 71% and 82%, so at the current sample size of
-four cases anything moving F1 by less than about 15 points is noise. Context
-recall was exactly 50% every run, being the one metric involving no model
-call.
+**Measured rather than assumed:** the flagpole case — Python API and TSX
+dashboard, 16 labelled defects, five deliberately clean sections — scores
+**56% recall, 82% precision, 67% F1** through the agentic pipeline. Five
+live runs on identical input found 6 to 7 defects each, a different subset
+every time, with zero comments on the clean sections across 47 posted.
+
+That spread is the point: at five cases, anything moving F1 by less than
+roughly fifteen points is noise, and several tuning comparisons made
+during development turned out to be measuring exactly that.
 
 **Known gaps, written down rather than hidden:**
 - Connected-file context finds callers of changed functions, not consumers of

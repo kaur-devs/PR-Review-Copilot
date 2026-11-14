@@ -17,6 +17,8 @@ from src.agents.specialists import review as run_specialists
 from src.agents.summary import summarise
 from src.agents.triage import specialists_for
 from src.agents.tools import Toolbox
+from src.analysis.lint import findings_for
+from src.config_file import RepoConfig
 from src.classification.classify import classify
 from src.common import trace
 from src.context.bundle import ContextBundle
@@ -67,6 +69,11 @@ def _resources(config: RunnableConfig) -> tuple[LLMProvider, LLMProvider, Toolbo
     return bag["model"], bag["judge"], bag["toolbox"]
 
 
+def _settings(config: RunnableConfig) -> RepoConfig:
+    """What the repository under review asked for, or our defaults."""
+    return config["configurable"].get("repo_config") or RepoConfig()
+
+
 # --------------------------------------------------------------- the nodes
 
 
@@ -104,11 +111,34 @@ async def specialists(state: ReviewState, config: RunnableConfig) -> dict:
         if run.stopped_because != "answered"
     )
 
+    # The linter runs here rather than as its own node so that the one
+    # list of candidates is still written by one node: a reducer that
+    # merged two writers would double the findings on a resumed run.
+    found = lint_findings(_resources(config)[2], state["diffs"])
+
     return {
-        "candidates": outcome.findings,
+        "candidates": outcome.findings + found,
         "turns": outcome.turns,
         "stopped_early": stopped,
     }
+
+
+def lint_findings(toolbox, diffs) -> list[Finding]:
+    """What a linter can settle without spending a token.
+
+    Deterministic, so it carries the same confidence every time and goes
+    through the same gates and the same verifier as anything the model
+    says. Nothing here is trusted more for being mechanical.
+    """
+    root = getattr(getattr(toolbox, "snapshot", None), "root", None)
+    if root is None:
+        return []
+    try:
+        return findings_for(root, diffs)
+    except Exception:
+        # A linter that falls over must not take the review with it.
+        logger.exception("the lint pass failed, carrying on without it")
+        return []
 
 
 def repeats(state: ReviewState) -> dict:
@@ -138,10 +168,10 @@ def repeats(state: ReviewState) -> dict:
     return {"fresh": outcome.fresh, "repeats": outcome.repeats}
 
 
-def severity(state: ReviewState) -> dict:
+def severity(state: ReviewState, config: RunnableConfig) -> dict:
     """Drop what can never be posted, before paying to verify it."""
     candidates = state.get("fresh", state.get("candidates", []))
-    result = severity_gate(candidates)
+    result = severity_gate(candidates, postable=_settings(config).severities)
 
     for finding, reason in result.hold:
         trace.item(f"dropped  {finding.file}:{finding.line}  ({reason})")
@@ -181,9 +211,12 @@ async def verify(state: ReviewState, config: RunnableConfig) -> dict:
     }
 
 
-def confidence(state: ReviewState) -> dict:
+def confidence(state: ReviewState, config: RunnableConfig) -> dict:
     """The last gate. Runs after the judge, which is what moves a score."""
-    result = confidence_gate(state.get("verified", []))
+    result = confidence_gate(
+        state.get("verified", []),
+        minimum_confidence=_settings(config).minimum_confidence,
+    )
 
     for finding, reason in result.hold:
         trace.item(f"held  {finding.file}:{finding.line}  ({reason})")

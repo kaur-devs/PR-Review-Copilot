@@ -53,11 +53,21 @@ Build a transparent, installable AI reviewer that understands what a change actu
 - Cost: zero paid API spend — free-tier providers only; track API requests per review from week 1, since request quota is the binding constraint.
 
 ## 9. Success Metrics
-- Recall against a curated set of real historical PR bugs.
-- False-positive rate against the same set.
-- API requests consumed per PR review.
-- Judge-pass grounding accuracy (how often the judge correctly discards a bad finding).
-- Qualitative: would these findings have been worth a human reviewer's time (installed on the builder's own repos).
+
+| Metric | Where it stands |
+|---|---|
+| Recall against labelled defects | **56%** on the flagpole case |
+| Precision | **82%** measured; zero comments on five deliberately clean sections across 47 posted |
+| Cost per review | ~110 model calls, ~40 seconds, recorded per review row |
+| Judge accuracy | contradicted a false positive in three consecutive runs, after eighteen of agreeing with everything |
+| Qualitative | installed on the builder's own repositories; every defect posted so far has been real |
+
+The number worth defending is precision. Independent reporting on this
+market found that no party without a commercial stake has published a
+false-positive rate for any shipping AI code reviewer; vendor figures
+disagree with each other by wide margins. A measured precision on a set
+with deliberate false-positive bait is the thing this project has that
+the category does not.
 
 ## 10. Risks
 | Risk | Probability | Impact | Mitigation |

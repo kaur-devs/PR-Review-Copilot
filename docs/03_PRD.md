@@ -36,9 +36,10 @@ worth a developer's attention as inline comments.
 | Evaluation harness | Must | built |
 | Suggested replacement lines | Should | built |
 | Multi-language review | Should | built, not evaluated |
+| Linter pass before the model | Should | built |
+| Feedback-driven suppression | Should | built |
+| Per-repository configuration | Should | built |
 | Deployment | Must | **not built** |
-| Feedback-driven suppression | Should | **not built** |
-| Per-repository configuration | Should | **not built** |
 | Deeper cross-file graph | Could | not built |
 | Autonomous fixing or merging | Won't | out of scope by principle |
 
@@ -84,8 +85,12 @@ As a developer, I want the pull request to stay readable.
 - Low severity and low confidence are stored but not posted.
 - The summary says how many were held back, so nothing is hidden silently.
 
-**Built**, except the part that lets a repository ask for more: there is no
-configuration file, so the thresholds are the same everywhere.
+**Built.** A repository sets its own thresholds in `.pr-review.yml`:
+which severities reach the pull request, the confidence floor, categories
+to leave alone, and how many comments at most. Adding `low` to
+`severities` is how a team asks to see everything. The file lives in the
+repository under review, so the people being commented on own the
+settings and a branch can change them.
 
 ### US-005 — A credible number
 As a builder, I want a measured recall and false-positive rate I can defend.
@@ -98,10 +103,19 @@ four are Python.
 As a team, I want the reviewer to fall silent on a category we keep
 dismissing.
 
-**Not built.** `outcomes` records what developers did and carries an index on
-`(repo_id, category)` for exactly this query. Nothing reads it yet, and
-nothing will mean anything until the App has real users dismissing real
-comments.
+**Built, and deliberately slow to act.** A category is silenced for a
+repository once at least ten findings in it have been posted and fewer
+than one in five were acted on.
+
+The evidence needs care. GitHub never says "this comment was wrong" — only
+that a thread was resolved — so a rejection cannot be stored, and an
+acceptance rate over stored rows alone would always read 100%. The
+denominator is therefore every finding posted in that category and the
+numerator is the ones somebody resolved. A suppressed finding is held, not
+deleted, so lowering the threshold recovers it without re-reviewing.
+
+It will still say nothing until a repository has real history, which is
+correct rather than a limitation.
 
 ## What a review produces
 

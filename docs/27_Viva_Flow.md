@@ -472,27 +472,58 @@ switched off one at a time.
 
 **The honest headline:**
 
-> Three consecutive runs on identical input gave F1 of 74%, 71% and 82%. The
-> model is not deterministic even at temperature zero, so at four cases
-> anything moving F1 by less than about 15 points is noise. Context recall was
-> exactly 50% every run, because it involves no model call — which makes it
-> the metric worth tuning against.
+> On the flagpole case — 246 lines, 8 files, Python API and TSX dashboard,
+> 16 labelled defects and five deliberately clean sections — the harness
+> reports **56% recall, 82% precision, 67% F1** through the agentic
+> pipeline.
+>
+> Five live runs on a byte-identical pull request found 6 to 7 of those
+> defects each, a different subset every time, with **zero comments on the
+> five clean sections across 47 posted comments**. Only one defect was
+> found in all five runs.
 
-That variance is the strongest argument for a 50-pull-request benchmark.
+Two things that number depends on, both learned the hard way:
+
+- The harness called the **single-pass** reviewer unconditionally until
+  recently, so every figure it produced described a pipeline the service
+  had stopped using.
+- Scoring allowed a defect only one anchor. A cross-file break has two
+  ends, and counting one of them scored a correct finding as a miss and a
+  false positive at once. Fixing that moved the same run from 35%/67% to
+  56%/82% without touching the reviewer.
+
+The run-to-run variance is the strongest argument for a 50-pull-request
+benchmark. It is also the reason several single-run before-and-after
+comparisons made during tuning proved nothing.
 
 ---
 
 ## Closing — what is not built
 
-- **Deployment.** The only unbuilt feature.
-- **No recovery for interrupted reviews.** The index for the scan exists; the
-  scan does not.
-- **Missed deliveries are invisible.** GitHub does not retry.
-- **No deduplication across re-reviews.** Push twice, comments post twice.
-- **Classification does not chunk**, so a large pull request falls back.
-- **Skip rules miss non-Python files**, wasting tokens.
-- **Thresholds are hand-chosen**, not calibrated.
-- **Python only**, in three files of the context package.
+- **Deployment.** Still the only binary gap: no Dockerfile, no host. It
+  runs on a laptop behind a tunnel.
+- **Missed deliveries are invisible.** GitHub does not retry, and nothing
+  reconciles afterwards.
+- **No chat on the pull request.** Every competitor has it. A developer
+  cannot ask why a comment was made.
+- **No metrics or alerting.** A repeated failure is found by reading the
+  terminal.
+- **Prompt injection inside a tool result.** Nothing separates
+  instructions from data in a file the agent reads. The blast radius is a
+  wrong comment, but the gap is real.
+- **Five evaluation cases.** Too few to separate a real improvement from
+  noise, which the variance above demonstrates rather than asserts.
+- **Thresholds are hand-chosen**, not calibrated — though a repository can
+  now change them in `.pr-review.yml`.
+- **Seven defect classes in the labelled set have never been found by any
+  run**, the most interesting being a ramp marked applied after one step,
+  so the feature silently does nothing. That needs reasoning about
+  behaviour over time rather than spotting a bad line.
+
+Built since an earlier version of this list claimed otherwise: recovery
+for interrupted reviews, deduplication across re-reviews, multi-language
+parsing, outcome-driven suppression, per-repository configuration, a
+linter pass, and provenance on every finding.
 
 Saying these before being asked is stronger than being caught by them. Each
 one is in the HLD with a measurement or a specific pull request behind it.

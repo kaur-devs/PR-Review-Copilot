@@ -64,4 +64,6 @@ async def collect_diffs(event: PullRequestEvent, outcome, *, github_client) -> b
 def finish(outcome, started: float, calls_before: int, quota) -> None:
     """The bookkeeping every review ends with, however it got there."""
     outcome.model_calls = quota.requests - calls_before
+    outcome.prompt_tokens = quota.prompt_tokens
+    outcome.completion_tokens = quota.completion_tokens
     outcome.seconds = time.monotonic() - started

@@ -37,6 +37,12 @@ class LanguageSupport:
     identifiers: Query
     imports: Query
 
+    # Everything worth remembering about a file, in one pass. Separate from
+    # the queries above because those answer "does this file use that
+    # symbol"; this one answers "what names does this file contain at all",
+    # which is the question an index has to store.
+    indexable: Query
+
     parser: Parser = field(init=False)
 
     def __post_init__(self) -> None:
@@ -128,6 +134,18 @@ PYTHON = PythonSupport(
         "                          attribute: (identifier) @name)) @call",
     ),
     identifiers=Query(_PYTHON_GRAMMAR, "(identifier) @name"),
+    indexable=Query(
+        _PYTHON_GRAMMAR,
+        """
+        (function_definition name: (identifier) @definition)
+        (class_definition name: (identifier) @definition)
+        (call function: (identifier) @call)
+        (attribute attribute: (identifier) @property)
+        (dictionary (pair key: (string (string_content) @key)))
+        (subscript subscript: (string (string_content) @key))
+        (keyword_argument name: (identifier) @argument)
+        """,
+    ),
     imports=Query(
         _PYTHON_GRAMMAR,
         """
@@ -146,6 +164,29 @@ PYTHON = PythonSupport(
     ),
 )
 
+
+# A wildcard where the three grammars disagree: a class name is an
+# (identifier) in JavaScript and a (type_identifier) in TypeScript.
+JS_INDEXABLE = """
+(function_declaration name: (identifier) @definition)
+(class_declaration name: (_) @definition)
+(method_definition name: (property_identifier) @definition)
+(variable_declarator name: (identifier) @definition)
+(call_expression function: (identifier) @call)
+(member_expression property: (property_identifier) @property)
+(pair key: (property_identifier) @key)
+(pair key: (string (string_fragment) @key))
+(subscript_expression index: (string (string_fragment) @key))
+"""
+
+# The shape of an API response as TypeScript declares it. This is how the
+# far end of a renamed backend key is found, so it is worth its own
+# patterns rather than being folded into the shared set.
+TS_INDEXABLE = """
+(property_signature name: (property_identifier) @key)
+(interface_declaration name: (type_identifier) @definition)
+(type_alias_declaration name: (type_identifier) @definition)
+"""
 
 # Three tree-sitter grammars, one set of queries.
 
@@ -238,7 +279,7 @@ class JavaScriptSupport(LanguageSupport):
 
 
 def _javascript_family(
-    name: str, suffixes: set[str], grammar: Language
+    name: str, suffixes: set[str], grammar: Language, *, typescript: bool = False
 ) -> JavaScriptSupport:
     return JavaScriptSupport(
         name=name,
@@ -266,6 +307,9 @@ def _javascript_family(
         calls=Query(grammar, JS_CALLS),
         attribute_calls=Query(grammar, JS_ATTRIBUTE_CALLS),
         identifiers=Query(grammar, JS_IDENTIFIERS),
+        indexable=Query(
+            grammar, JS_INDEXABLE + (TS_INDEXABLE if typescript else "")
+        ),
         imports=Query(grammar, JS_IMPORTS),
     )
 
@@ -280,12 +324,14 @@ TYPESCRIPT = _javascript_family(
     "typescript",
     {".ts", ".mts", ".cts"},
     Language(tree_sitter_typescript.language_typescript()),
+    typescript=True,
 )
 
 TSX = _javascript_family(
     "tsx",
     {".tsx"},
     Language(tree_sitter_typescript.language_tsx()),
+    typescript=True,
 )
 
 

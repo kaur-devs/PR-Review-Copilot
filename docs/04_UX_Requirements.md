@@ -9,7 +9,15 @@ The primary interface is **GitHub itself** — there is no separate frontend in 
 3. *(Optional, v2+)* Lightweight web dashboard — installed repos, recent reviews, quota report, eval results
 
 ## Primary User Flow
-Install app on repo → open/update PR → wait ~1 minute → review appears as inline comments, severity-gated → resolve or dismiss each comment → *(v2)* dashboard shows suppression behavior building up per repo.
+Install app on repo → open/update PR → wait about 40 seconds → review
+appears as inline comments, severity-gated, with a one-line fix behind
+GitHub's Apply button where the whole fix fits on the line → resolve or
+dismiss each comment → the reviewer notices which categories a repository
+stops acting on and goes quiet on them.
+
+A repository that wants different thresholds adds `.pr-review.yml`. There
+is no dashboard and no settings UI; the settings live in the repository
+so the people being commented on own them.
 
 ## Key Surface Requirements
 

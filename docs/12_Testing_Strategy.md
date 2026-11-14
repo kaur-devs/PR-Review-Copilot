@@ -1,6 +1,6 @@
 # Testing Strategy
 
-625 tests, about 16 seconds. No test reaches the network or the development
+677 tests, about 19 seconds. No test reaches the network or the development
 database.
 
 ```bash
@@ -71,7 +71,12 @@ after a real failure is worth more when it says which one.
 | Rate limited by the model | waits for the window, retries | covered |
 | Daily token budget spent | fails at once rather than retrying | covered |
 | Hallucinated tool name | corrected, run continues | covered |
-| Two findings about the same block | merged into one comment | **not built** |
+| Tool arguments the schema refuses | corrected, run continues | covered |
+| The agent will not answer at the cap | asked again with no tool calls to continue | covered |
+| A linter rule that is wrong for the framework | never selected, pinned by test | covered |
+| A category a repository ignores | suppressed after ten posted findings | covered |
+| A repository's own thresholds | read from `.pr-review.yml`, broken file ignored | covered |
+| Two findings about the same block | merged into one comment | covered |
 | Crash after GitHub accepted, before it was recorded | nothing posted twice | **not covered — see below** |
 
 ### The double-post window
@@ -112,12 +117,25 @@ context, judge and templates.
 
 | | Planned | Actual |
 |---|---|---|
-| Cases | 30–50 historical pull requests | **4** |
-| Languages | whatever the repositories use | **Python only** |
+| Cases | 30–50 historical pull requests | **5** |
+| Languages | whatever the repositories use | Python and TypeScript |
 
-Both gaps matter and neither is hidden: four cases cannot distinguish a real
-improvement from noise, and JavaScript and TypeScript support ships with no
-evaluation evidence behind it at all.
+Five cases still cannot separate a real improvement from noise. What has
+changed is that the languages gap is closed and the harness now runs the
+pipeline the service actually uses — it called the single-pass reviewer
+unconditionally until recently, so every number it produced described a
+system that had been replaced.
+
+The flagpole case is 246 lines across 8 files, Python API and TSX
+dashboard, with 16 labelled defects and five deliberately clean sections
+that count against precision if commented on. Latest run: **56% recall,
+82% precision, 67% F1**.
+
+Scoring allows a defect more than one anchor. A cross-file break has two
+ends — the rename and the line that still reads the old name — and
+counting only one of them scored a correct finding as a miss and a false
+positive at once. Fixing that moved the same run from 35%/67% to
+56%/82% without touching the reviewer.
 
 Competitor numbers are the calibration, not the target: Qodo 60.1% F1,
 CodeRabbit 51.2% F1, Greptile's self-reported 82% bug-catch rate.

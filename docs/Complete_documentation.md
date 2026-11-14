@@ -1,6 +1,6 @@
 # PR Review Copilot — Complete Documentation
 
-Generated from the 30 documents in `docs/` on 2026-11-13.
+Generated from the 30 documents in `docs/` on 2026-11-14.
 Edit those, then run `.venv/bin/python scripts/build_docs.py`.
 
 ## Contents
@@ -15,11 +15,11 @@ Edit those, then run `.venv/bin/python scripts/build_docs.py`.
 8. [API Specification](#api-specification) — `08_API_Specification.md`
 9. [Low-Level Design](#low-level-design) — `09_LLD.md`
 10. [Generative AI Architecture](#generative-ai-architecture) — `10_GenAI_Architecture.md`
-11. [Security Design](#security-design) — `11_Security.md`
+11. [Security](#security) — `11_Security.md`
 12. [Testing Strategy](#testing-strategy) — `12_Testing_Strategy.md`
 13. [CI/CD](#cicd) — `13_CICD.md`
 14. [Observability](#observability) — `14_Observability.md`
-15. [Deployment Architecture](#deployment-architecture) — `15_Deployment.md`
+15. [Deployment](#deployment) — `15_Deployment.md`
 16. [Quota & Resource Analysis](#quota-resource-analysis) — `16_Quota_Analysis.md`
 17. [8-Week Project Roadmap](#8-week-project-roadmap) — `17_Roadmap.md`
 18. [Team Responsibilities](#team-responsibilities) — `18_Team_Responsibilities.md`
@@ -55,7 +55,20 @@ PR Review Copilot is an end-to-end AI code review system that reads a pull reque
 The platform is intentionally designed as a **review-support system, not an autonomous merge gate**. A human developer remains responsible for the final decision to merge.
 
 ## Core Product Flow
-PR opened/updated → webhook received → diff fetched → connected-file context gathered → change classified → task-decomposed review generated → judge/grounding pass → confidence/dedup filter → severity-gated comments posted → outcome captured → (v2) per-repo tuning.
+PR opened or updated → webhook verified and the commit claimed → diff
+fetched and parsed → repository snapshot downloaded → change classified →
+triage picks which reviewers to wake → **one agent per changed file, per
+reviewer, each able to grep and read the repository while it decides** →
+a linter pass on the same changed lines → repeats dropped → severity gate
+→ verification by a second model from a different family → confidence
+gate → the repository's own settings and any suppressed categories →
+severity-gated inline comments posted → outcome captured.
+
+The single-pass version of this flow — classify, generate, judge, filter
+— still exists and is what the pipeline falls back to. It was replaced as
+the default because it could not find a defect whose two ends sat in
+different files: the context it needed had to be chosen before anyone
+knew what the bug was.
 
 ## MVP
 1. GitHub App installable on a repo.
@@ -69,13 +82,17 @@ PR opened/updated → webhook received → diff fetched → connected-file conte
 9. Evaluation harness (recall / false-positive rate on real historical PRs).
 
 ## Out of Scope for MVP
-- Autofix / one-click apply.
+- Autofix, merging or blocking — out of scope by principle, not by effort.
 - Multi-platform support (GitLab, Bitbucket, Azure DevOps).
-- Custom team rules / compliance configuration UI.
-- Dedicated security-scanning pillar (SAST).
+- A configuration UI. Settings are a file in the repository instead.
+- A dedicated SAST pillar. A curated linter pass runs, chosen rule by
+  rule; a full security scanner is not in scope.
 - IDE integration.
 - Training or fine-tuning a model.
-- Full-codebase graph indexing (v1 uses targeted search, not a full graph).
+- Full-codebase graph indexing. Cross-file questions are answered by an
+  agent at review time rather than by a pre-built index — the trade is
+  flexibility against consistency, and the inconsistency is measurable.
+- Chat on the pull request.
 
 ---
 
@@ -134,11 +151,21 @@ Build a transparent, installable AI reviewer that understands what a change actu
 - Cost: zero paid API spend — free-tier providers only; track API requests per review from week 1, since request quota is the binding constraint.
 
 ## 9. Success Metrics
-- Recall against a curated set of real historical PR bugs.
-- False-positive rate against the same set.
-- API requests consumed per PR review.
-- Judge-pass grounding accuracy (how often the judge correctly discards a bad finding).
-- Qualitative: would these findings have been worth a human reviewer's time (installed on the builder's own repos).
+
+| Metric | Where it stands |
+|---|---|
+| Recall against labelled defects | **56%** on the flagpole case |
+| Precision | **82%** measured; zero comments on five deliberately clean sections across 47 posted |
+| Cost per review | ~110 model calls, ~40 seconds, recorded per review row |
+| Judge accuracy | contradicted a false positive in three consecutive runs, after eighteen of agreeing with everything |
+| Qualitative | installed on the builder's own repositories; every defect posted so far has been real |
+
+The number worth defending is precision. Independent reporting on this
+market found that no party without a commercial stake has published a
+false-positive rate for any shipping AI code reviewer; vendor figures
+disagree with each other by wide margins. A measured precision on a set
+with deliberate false-positive bait is the thing this project has that
+the category does not.
 
 ## 10. Risks
 | Risk | Probability | Impact | Mitigation |
@@ -202,9 +229,10 @@ worth a developer's attention as inline comments.
 | Evaluation harness | Must | built |
 | Suggested replacement lines | Should | built |
 | Multi-language review | Should | built, not evaluated |
+| Linter pass before the model | Should | built |
+| Feedback-driven suppression | Should | built |
+| Per-repository configuration | Should | built |
 | Deployment | Must | **not built** |
-| Feedback-driven suppression | Should | **not built** |
-| Per-repository configuration | Should | **not built** |
 | Deeper cross-file graph | Could | not built |
 | Autonomous fixing or merging | Won't | out of scope by principle |
 
@@ -250,8 +278,12 @@ As a developer, I want the pull request to stay readable.
 - Low severity and low confidence are stored but not posted.
 - The summary says how many were held back, so nothing is hidden silently.
 
-**Built**, except the part that lets a repository ask for more: there is no
-configuration file, so the thresholds are the same everywhere.
+**Built.** A repository sets its own thresholds in `.pr-review.yml`:
+which severities reach the pull request, the confidence floor, categories
+to leave alone, and how many comments at most. Adding `low` to
+`severities` is how a team asks to see everything. The file lives in the
+repository under review, so the people being commented on own the
+settings and a branch can change them.
 
 ### US-005 — A credible number
 As a builder, I want a measured recall and false-positive rate I can defend.
@@ -264,10 +296,19 @@ four are Python.
 As a team, I want the reviewer to fall silent on a category we keep
 dismissing.
 
-**Not built.** `outcomes` records what developers did and carries an index on
-`(repo_id, category)` for exactly this query. Nothing reads it yet, and
-nothing will mean anything until the App has real users dismissing real
-comments.
+**Built, and deliberately slow to act.** A category is silenced for a
+repository once at least ten findings in it have been posted and fewer
+than one in five were acted on.
+
+The evidence needs care. GitHub never says "this comment was wrong" — only
+that a thread was resolved — so a rejection cannot be stored, and an
+acceptance rate over stored rows alone would always read 100%. The
+denominator is therefore every finding posted in that category and the
+numerator is the ones somebody resolved. A suppressed finding is held, not
+deleted, so lowering the threshold recovers it without re-reviewing.
+
+It will still say nothing until a repository has real history, which is
+correct rather than a limitation.
 
 ## What a review produces
 
@@ -315,7 +356,15 @@ The primary interface is **GitHub itself** — there is no separate frontend in 
 3. *(Optional, v2+)* Lightweight web dashboard — installed repos, recent reviews, quota report, eval results
 
 ## Primary User Flow
-Install app on repo → open/update PR → wait ~1 minute → review appears as inline comments, severity-gated → resolve or dismiss each comment → *(v2)* dashboard shows suppression behavior building up per repo.
+Install app on repo → open/update PR → wait about 40 seconds → review
+appears as inline comments, severity-gated, with a one-line fix behind
+GitHub's Apply button where the whole fix fits on the line → resolve or
+dismiss each comment → the reviewer notices which categories a repository
+stops acting on and goes quiet on them.
+
+A repository that wants different thresholds adds `.pr-review.yml`. There
+is no dashboard and no settings UI; the settings live in the repository
+so the people being commented on own them.
 
 ## Key Surface Requirements
 
@@ -405,10 +454,12 @@ to use no framework at all.
 | TR-012 | Per-model token budgets, reserved before sending | built |
 | TR-013 | Resume a review interrupted by a restart | built |
 | TR-014 | Retire a review when a newer commit arrives | built |
-| TR-015 | Multi-language parsing: Python, JS, TS, TSX | built, not evaluated |
+| TR-015 | Multi-language parsing: Python, JS, TS, TSX | built, evaluated |
 | TR-016 | Deployment GitHub can reach | **not built** |
-| TR-017 | Per-repository suppression from outcomes | **not built** |
-| TR-018 | Per-repository configuration file | **not built** |
+| TR-017 | Per-repository suppression from outcomes | built |
+| TR-018 | Per-repository configuration file | built |
+| TR-019 | Linter pass on changed lines, before the model | built |
+| TR-020 | Model, prompt version and cost recorded per finding | built |
 
 ## Non-functional targets
 
@@ -425,10 +476,26 @@ any thinking. It is a tier limit, not a code limit — the same review on a
 paid tier fits inside one minute's budget. Stated rather than quietly
 dropped.
 
-**Not met: provenance.** Nothing records which model or prompt version
-produced a finding. The `findings` table has no column for it, so a result
-cannot be traced back to what generated it. For a project whose argument is
-"measured, not claimed", that is the most important of these gaps.
+**Provenance.** Every finding records the model that produced it, a
+`prompt_version` derived from the prompt text itself, and which specialist
+or the linter found it. Every review records its model calls, prompt and
+completion tokens, and seconds. The prompt version is a hash rather than a
+hand-maintained number, because a version nobody remembers to bump is worse
+than none: it claims a finding came from a prompt that may not be the one
+that produced it.
+
+**Measured.** On the flagpole case — 246 lines, 8 files, Python and TSX, 16
+labelled defects and five deliberate false-positive baits — the harness
+reports **56% recall, 82% precision, 67% F1** through the agentic pipeline.
+Reproduce it with:
+
+```bash
+AGENTIC_PIPELINE=1 .venv/bin/python -m src.evaluation.run \
+    --case flagpole-scheduled-rollouts --only H0
+```
+
+Earlier numbers quoted in this project came from reading logs. This one does
+not.
 
 ---
 
@@ -645,6 +712,10 @@ One row per unit of work: one commit on one pull request.
 | `error_code` | varchar(64) | nullable, set when `status = failed` |
 | `context_status` | varchar(16) | nullable — `ok` / `degraded` / `unavailable` |
 | `github_review_id` | bigint | nullable, set once GitHub accepts |
+| `model_calls` | integer | nullable — what the review cost |
+| `prompt_tokens` | integer | nullable |
+| `completion_tokens` | integer | nullable |
+| `seconds` | float | nullable |
 | `created_at` | timestamptz | |
 | `updated_at` | timestamptz | refreshed on every change; finds stuck reviews |
 
@@ -668,8 +739,12 @@ can be retuned without re-running the reviewer (ADR-010).
 | `line` | integer | |
 | `severity` | varchar(32) | |
 | `category` | varchar(64) | |
+| `message` | text | nullable — the sentence the developer actually read |
 | `rationale` | text | |
 | `confidence` | float | |
+| `model` | varchar(128) | nullable — which model produced it |
+| `prompt_version` | varchar(32) | nullable — a hash of the prompt text |
+| `found_by` | varchar(32) | nullable — `wrong`, `robust` or `lint` |
 | `posted` | boolean | |
 | `github_comment_id` | bigint | nullable — how an outcome is matched back |
 
@@ -715,6 +790,7 @@ erDiagram
 | `ix_reviews_status_updated` | the stuck-review recovery scan |
 | `ix_findings_review_id` | a review's findings |
 | `ix_outcomes_repo_category` | acceptance rate per category, per repository |
+| `ix_findings_model_prompt` | what each model and prompt version actually found |
 | `ck_reviews_status` | rejects a status nothing understands |
 | `ck_reviews_context_status` | same, for context quality |
 | `ck_webhook_events_outcome` | same, for delivery outcome |
@@ -742,18 +818,17 @@ which is what lets an outcome be tied back to the finding that produced it.
 
 ## Known gaps
 
-- **The posted message is not reliably stored.** `findings` has `rationale`
-  but no `message` column, and `store_findings` writes
-  `rationale or message`. The sentence a developer actually read cannot
-  always be reconstructed from the database, which weakens the retuning
-  argument that justifies storing held-back findings at all. A `message`
-  column is the fix.
-- **`outcomes` is written but never read.** The acceptance-rate metric and
-  the per-repository suppression it would feed are not built.
-  `ix_outcomes_repo_category` exists for exactly that query.
 - **Development and production share one database.** The test database is
   separate and wiped on every run, which is why `conftest.py` refuses to
   start when `TEST_DATABASE_URL` matches `DATABASE_URL`.
+- **Reviews 1–23 predate the provenance columns** and carry nulls there.
+  Backfilling them with a guess would be worse than leaving them blank,
+  which at least says "we did not record this".
+- **A rejection is never stored.** GitHub reports a thread resolved or
+  unresolved, and nothing else, so `outcomes` only ever holds `accepted`.
+  Suppression works around it by taking the denominator from posted
+  findings rather than from stored outcomes — see the product
+  requirements, US-006.
 
 ---
 
@@ -1133,7 +1208,7 @@ being slow to listen loses messages outright.
 
 ## 7. Testing
 
-625 tests, about 16 seconds. **No test reaches the network or the
+677 tests, about 19 seconds. **No test reaches the network or the
 development database.**
 
 | Folder | Needs | Count |
@@ -1224,7 +1299,23 @@ Four kinds of model call, in increasing cost:
 | Cheap verification | no | no |
 | Specialist, agentic verification | yes | yes |
 
-Triage makes no call at all: it reads labels the classifier already produced.
+Triage makes no call at all: it reads labels the classifier already
+produced. Neither does the linter pass, which runs beside the specialists.
+
+**A linter first, on rules chosen by what they cost.** The cheap, certain
+half of the job should not be paid for in tokens. Enabling a ruleset
+wholesale was tried first and was worse than nothing: ruff's default
+bugbear and bandit sets produced seven findings on a test pull request and
+every one was wrong in context — `B008` fires on `Depends()` in an
+argument default, which is how FastAPI is written, and `S105` calls a
+placeholder constant a hardcoded password.
+
+So the selector is curated and a rule earns its place empirically: it must
+fire on real defects and stay silent on three working codebases. What
+survives catches a mutable default argument and a blocking `sleep` inside
+an async function, finds nothing on any of the three, and costs nothing.
+Its findings go through the same gates and the same verifier as the
+model's. Nothing is trusted more for being mechanical.
 
 ## Why a loop, and only where it pays
 
@@ -1361,45 +1452,97 @@ itself with the same rigour and report the model that produced each number.
 
 ---
 
-# Security Design
+# Security
 
 ## Authentication
-GitHub App authentication via JWT (app-level) and installation access tokens (per-repo, short-lived).
 
-## Authorization
-GitHub App permissions, scoped to minimum necessary:
-- `pull_requests: read & write`
-- `contents: read`
-- No other scopes requested.
+A GitHub App signs a JWT with its private key, exchanges it for a
+short-lived installation token, and uses that. Tokens are cached until
+shortly before they expire and never written down.
 
-## Data Protection
-- No PR source code stored beyond what's needed for the specific review (findings/rationale, not full file contents).
-- Secrets (GitHub App private key, LLM provider API keys) kept in environment/secret management, never committed.
-- HTTPS for all external calls.
+## Authorisation
 
-## Webhook Security
-- Verify `X-Hub-Signature-256` on every incoming webhook.
-- Reject unsigned or mismatched requests before any processing.
+The App requests two permissions and nothing else:
 
-## API Security
-- Signature verification middleware.
-- Input validation on all internal endpoints.
-- Rate limiting to protect against webhook replay abuse.
+| | |
+|---|---|
+| `pull_requests` | read and write — to read the diff and post comments |
+| `contents` | read — to download the repository at the commit under review |
 
-## AI Security
-- Prompt injection defenses for untrusted diff/code content.
-- Structured output schema validation.
-- No arbitrary tool execution from PR content.
-- Record model and prompt-template versions per finding for auditability.
+No write access to code, no workflow permission, no administration.
 
-## Important Product Rule
-The system is a **review-support tool, not an autonomous merge gate**. It comments; it does not block, approve, or execute changes. A human developer remains responsible for the merge decision.
+## Webhook security
+
+Every delivery is checked against `X-Hub-Signature-256` before anything
+else happens, using `hmac.compare_digest` against the raw bytes — the
+parsed and re-encoded body does not match. A failure is logged and
+nothing is stored, so unauthenticated input never reaches the database.
+
+The reply to a bad signature is deliberately vague: a forger should learn
+nothing from it.
+
+Replay is handled by the unique constraint on `delivery_id` rather than
+by rate limiting. The same message twice produces one review and the
+second is recorded as a duplicate. There is **no rate limiting** on the
+endpoint; an earlier version of this document claimed there was.
+
+## Secrets
+
+The App's private key and the model API keys live in `.env`, which is
+gitignored. The config holds a *path* to the key, not the key. No secret
+is committed, and the only place a decrypted value could leak is a log
+line — which is a real risk, not a theoretical one: the reviewer found
+exactly that bug in a test repository, an API key written to the log at
+INFO.
+
+## What the model is allowed to do
+
+- No code from a pull request is ever executed.
+- Tools read the snapshot only. There is no write tool, no shell, no
+  network access from inside the loop.
+- Tool names and arguments are validated by the provider before our
+  toolbox runs, and a rejected call is corrected rather than obeyed.
+- Nothing the model says can trigger an action beyond posting a comment.
+  It cannot merge, approve, block, or change a setting.
+
+## Untrusted input, and what does not hold
+
+A pull request's diff, its comments, and **every file the toolbox reads**
+are untrusted. They are data, never instructions.
+
+The tool loop widens this rather than narrowing it: an agent reads
+arbitrary repository files and feeds them into its own conversation, so a
+file containing text addressed to a reviewer reaches the model inside a
+tool result.
+
+**What holds:** tool output is bounded and labelled as a result, findings
+must cite a line in the diff, a second model from a different family
+re-checks each one, and the blast radius of a successful injection is a
+wrong comment.
+
+**What does not hold:** there is no explicit instruction-versus-data
+separation inside a tool result, and nothing detects a file trying to
+address the reviewer. This is a known gap, stated rather than claimed as
+solved.
+
+## Auditability
+
+Every finding records the model that produced it, a `prompt_version`
+hashed from the prompt text, and whether a specialist or the linter found
+it. Every review records its calls, tokens and seconds. A result can be
+traced to what produced it.
+
+## The product rule
+
+It comments. It does not block, approve, merge, or change code. A human
+makes the merge decision. This is a principle rather than a limitation,
+and it is why autofix is out of scope.
 
 ---
 
 # Testing Strategy
 
-625 tests, about 16 seconds. No test reaches the network or the development
+677 tests, about 19 seconds. No test reaches the network or the development
 database.
 
 ```bash
@@ -1470,7 +1613,12 @@ after a real failure is worth more when it says which one.
 | Rate limited by the model | waits for the window, retries | covered |
 | Daily token budget spent | fails at once rather than retrying | covered |
 | Hallucinated tool name | corrected, run continues | covered |
-| Two findings about the same block | merged into one comment | **not built** |
+| Tool arguments the schema refuses | corrected, run continues | covered |
+| The agent will not answer at the cap | asked again with no tool calls to continue | covered |
+| A linter rule that is wrong for the framework | never selected, pinned by test | covered |
+| A category a repository ignores | suppressed after ten posted findings | covered |
+| A repository's own thresholds | read from `.pr-review.yml`, broken file ignored | covered |
+| Two findings about the same block | merged into one comment | covered |
 | Crash after GitHub accepted, before it was recorded | nothing posted twice | **not covered — see below** |
 
 ### The double-post window
@@ -1511,12 +1659,25 @@ context, judge and templates.
 
 | | Planned | Actual |
 |---|---|---|
-| Cases | 30–50 historical pull requests | **4** |
-| Languages | whatever the repositories use | **Python only** |
+| Cases | 30–50 historical pull requests | **5** |
+| Languages | whatever the repositories use | Python and TypeScript |
 
-Both gaps matter and neither is hidden: four cases cannot distinguish a real
-improvement from noise, and JavaScript and TypeScript support ships with no
-evaluation evidence behind it at all.
+Five cases still cannot separate a real improvement from noise. What has
+changed is that the languages gap is closed and the harness now runs the
+pipeline the service actually uses — it called the single-pass reviewer
+unconditionally until recently, so every number it produced described a
+system that had been replaced.
+
+The flagpole case is 246 lines across 8 files, Python API and TSX
+dashboard, with 16 labelled defects and five deliberately clean sections
+that count against precision if commented on. Latest run: **56% recall,
+82% precision, 67% F1**.
+
+Scoring allows a defect more than one anchor. A cross-file break has two
+ends — the rename and the line that still reads the old name — and
+counting only one of them scored a correct finding as a miss and a false
+positive at once. Fixing that moved the same run from 35%/67% to
+56%/82% without touching the reviewer.
 
 Competitor numbers are the calibration, not the target: Qodo 60.1% F1,
 CodeRabbit 51.2% F1, Greptile's self-reported 82% bug-catch rate.
@@ -1525,97 +1686,174 @@ CodeRabbit 51.2% F1, Greptile's self-reported 82% bug-catch rate.
 
 # CI/CD
 
-## Pipeline
-```text
-Developer
-  ↓
-Feature Branch
-  ↓
-Pull Request
-  ↓
-Lint + Unit Tests
-  ↓
-Integration/Webhook Tests
-  ↓
-Security / Dependency Scan
-  ↓
-Build
-  ↓
-Deploy to Render (staging)
-  ↓
-Smoke Test (real test-repo PR)
-  ↓
-Production/Demo Deployment
+## What actually runs
+
+Nothing automated. There is no `.github/workflows/`, so every check below
+is one somebody types.
+
+```bash
+.venv/bin/python -m pytest                 # 677 tests, ~18s
+.venv/bin/ruff check src tests             # clean; the rules are in pyproject.toml
+.venv/bin/python -m alembic upgrade head   # before anything touches the schema
+.venv/bin/python scripts/build_docs.py     # regenerate the bundle
 ```
 
+The ruff configuration is the same curated selector the reviewer applies
+to other people's pull requests, so the project is held to its own rules.
+It found eight things in this codebase the first time it was pointed at
+it; they are fixed.
+
+Describing a pipeline that does not exist was the previous version of this
+document, which drew a diagram ending in "Deploy to Render (staging)".
+Nothing has ever deployed to Render.
+
+## What a pipeline would need to contain
+
+In this order, because each step is cheap relative to the one after it:
+
+1. `pytest` — the whole suite needs Postgres, so CI needs a service
+   container and `TEST_DATABASE_URL` pointing at it. `conftest.py` refuses
+   to run when that matches `DATABASE_URL`, which is what stops a
+   misconfigured job wiping the real review history.
+2. `ruff check` — the project now depends on ruff anyway, for the review
+   pass itself.
+3. `alembic upgrade head` against a throwaway database, so a migration
+   that does not apply fails before it reaches anything real.
+4. Build and deploy — blocked on TR-016, which is not built.
+
 ## Branching
-- `main`: stable
-- `feature/*`: incremental work
 
-## Pull Requests
-Every PR should contain: problem, solution, testing performed, and risks — the same discipline the tool itself enforces on others.
+`main` is stable. Work happens on `feature/*` and merges by pull request.
 
-## Quality Gates
-Do not merge when required tests fail or secrets are detected.
+## Pull requests
+
+Problem, solution, testing performed, risks. The same discipline the tool
+asks of everyone else.
+
+## Quality gates
+
+Do not merge on a failing test or a detected secret. Both are currently
+enforced by reading, not by tooling, which is the honest state of it.
 
 ---
 
 # Observability
 
+What exists is a console trace and structured logs. There are no metrics,
+no alerting, and no distributed tracing. The previous version of this
+document described all three as though they were running.
+
+## The review trace
+
+`src/common/trace.py` prints each stage of a review to stdout as it
+happens, which is what every measurement in this project has been read
+from:
+
+```
+> CHANGED FILES    8 changed · 8 reviewable · 0 skipped
+> TRIAGE           wrong, robust
+> SPECIALISTS      12 candidates · 16 agents over 8 file(s) · 71 turns
+> VERIFY           6 investigated · 11 supported, 1 contradicted
+> GATE             9 to post · 1 held back
+> SUGGESTIONS      6 offered, 1 refused
+> POSTED           review 5896062365
+  REVIEW 23 DONE · 11 posted, 1 held · 38.4s · 115 model calls
+```
+
+Every refusal, hold and contradiction prints its reason. That was not
+always true: the agentic pipeline printed suggestion counts without
+reasons for four reviews, having lost those two lines when the pipelines
+were split, so "4 refused" said nothing about why.
+
 ## Logs
-Log:
-- Request ID / webhook delivery ID
-- Repo ID, PR number
-- Review ID
-- Processing stage
-- LLM provider, model version, and prompt-template version
-- Error code
 
-Do not log full PR source code or diffs beyond what's necessary to debug a specific failure.
+Logged on every review: delivery id, repository, pull request number,
+review id, stage, model, wait reasons, and error code. `httpx` is held at
+WARNING so its per-request lines do not drown the trace.
 
-## Metrics
-- Webhook receipt rate and processing latency
-- Review success/failure rate
-- LLM latency (per stage)
-- Token usage and request-quota consumption per review
-- Judge-pass rejection rate
-- False-positive rate trend (from accepted/rejected outcomes)
+Not logged: pull request source beyond what a specific failure needs.
 
-## Tracing
-Trace: GitHub webhook → FastAPI → Diff Fetcher → Context Gatherer → Review Generator → Judge Pass → Filter → Comment Poster → Postgres.
+## What is measured, and where it lives
 
-## Alerts
-Trigger alerts for:
-- Repeated processing failures.
-- GitHub API errors (rate limit, auth failure).
-- LLM dependency failure.
-- Abnormal request-count spike per review, or approaching a provider's daily quota.
+| | Where |
+|---|---|
+| Calls, tokens and seconds per review | `reviews` table, per row |
+| Model, prompt version, finder per finding | `findings` table |
+| Acceptance rate per category per repository | `outcomes`, queried by suppression |
+| Recall, precision, F1 | `src/evaluation/`, written to `eval/reports/` |
+
+Cost per review is a SQL query rather than a log grep:
+
+```sql
+SELECT avg(model_calls), avg(prompt_tokens + completion_tokens), avg(seconds)
+FROM reviews WHERE status = 'posted';
+```
+
+## What is missing
+
+- **No metrics backend.** Nothing counts webhook receipt rate, stage
+  latency or failure rate over time. Each is derivable from the database
+  by hand.
+- **No alerting.** A repeated failure, an expired token or a spent daily
+  quota is discovered by reading the terminal.
+- **No request id on the way out.** Errors returned to GitHub carry a
+  generated `requestId`, but it is not written to the log, so it cannot
+  be used to find the request it names.
+
+The first two need somewhere to run before they mean anything, which puts
+them behind deployment.
 
 ---
 
-# Deployment Architecture
+# Deployment
 
-## Environments
-Development → Staging (test repo) → Production/Demo
+**Not deployed.** There is no `Dockerfile`, no `render.yaml`, no
+`Procfile`. The service runs with `uvicorn` on a laptop, reached through a
+tunnel, and the GitHub App's webhook URL points at that tunnel.
 
-## Suggested Deployment
-- FastAPI backend as a container/service on Render.
-- PostgreSQL via Supabase (free tier).
-- GitHub App registered against the deployed backend's public webhook URL.
-- LLM inference via free-tier hosted provider endpoints — no local model hosting, no paid API tier.
+This is the one requirement that is binary rather than a matter of degree,
+and it is the gap between a reviewer that works and a product somebody
+else can install. TR-016 tracks it.
 
-## No-GPU Constraint
-Because no local/dedicated GPU is available:
-1. All inference runs through free-tier hosted LLM APIs.
-2. No local model fine-tuning or training is attempted.
-3. Model access is kept provider-agnostic via an adapter, so a different hosted provider could be substituted without rearchitecting.
-4. Request-quota consumption and latency are tracked explicitly, since free-tier rate limits are the binding constraint (see Quota Analysis).
+## What is actually running today
+
+| | |
+|---|---|
+| Process | `uvicorn src.main:app --reload --port 8000` |
+| Reachable at | a tunnel, re-pointed whenever it restarts |
+| Database | Neon, hosted, shared with development |
+| Models | Groq, Developer plan, 250K tokens/min per model |
+| Secrets | `.env`, gitignored; the App key as a file path |
+
+## What deploying it has to solve
+
+These are known from running it, not guessed:
+
+- **The private key.** `src/config.py` takes a *path* to the App's key.
+  A hosted service has no file to point at, so the key has to arrive as an
+  environment variable and be written out or loaded in memory.
+- **Idle database connections.** Neon closes them. This has already caused
+  one failure mid-review, fixed by holding short sessions around each
+  phase rather than one across the whole review. A long-lived process will
+  meet the same thing differently.
+- **Recovery on startup.** `start_recovery()` scans for interrupted
+  reviews every time the process boots. On a platform that restarts
+  containers routinely, that runs far more often than it was designed for.
+- **The webhook URL.** Changing it means updating the App settings, and
+  deliveries sent to the old tunnel are lost rather than retried.
+- **One container, one rate limiter.** The token budget is per process.
+  Two instances would each believe they have the whole 250K per minute.
+
+## No GPU, by constraint
+
+All inference is through hosted APIs on a free or low-cost tier. Nothing
+is fine-tuned or trained. The provider sits behind our own client, so
+moving to another is four environment variables rather than a rewrite.
 
 ## Rollback
-Backend deployments are versioned; a broken deploy rolls back to the last known-good container image.
 
-## Database Migration
-Schema changes tracked with explicit migration scripts (e.g., Alembic) rather than ad hoc changes.
+Not applicable until there is something to roll back. Schema changes are
+versioned with Alembic and every migration has a tested `downgrade()`.
 
 ---
 
@@ -1758,16 +1996,19 @@ completion tokens, retries and seconds spent waiting. The pipelines read it
 before and after a review to report model calls, and the evaluation harness
 writes per-case figures to its JSON report.
 
-**It is a process-global in memory.** Nothing is written to Postgres: neither
-`reviews` nor `findings` has a column for tokens, calls, model or prompt
-version, and there is no `/quota-report` endpoint. Restart the service and the
-history is gone.
+It is still a process-global in memory, but it is no longer the only copy.
+Each review now writes its `model_calls`, `prompt_tokens`,
+`completion_tokens` and `seconds` to its own row, and each finding records
+the model and prompt version that produced it. Cost per review is a query:
 
-So cost per review is something this project has *measured* — once, by
-reading a log — not something it can *query*. For a project whose stated
-principle is "measured, not claimed", that is the gap worth closing first, and
-it is the same missing column as the provenance gap named in the technical
-requirements.
+```sql
+SELECT avg(model_calls), avg(prompt_tokens + completion_tokens), avg(seconds)
+FROM reviews WHERE status = 'posted';
+```
+
+There is still no `/quota-report` endpoint; the numbers are read with SQL.
+That is adequate for one developer and not for anyone else, which is the
+honest reason it is absent rather than a decision that it is unnecessary.
 
 ---
 
@@ -1786,6 +2027,30 @@ requirements.
 
 ## Definition of Done
 A feature is complete when: implemented, tested, documented, integrated, error paths handled, security considerations addressed, and demonstrable against a real PR.
+
+## How it actually went
+
+The plan held until week 5 and then changed shape, which is worth
+recording rather than tidying away.
+
+| Planned | What happened |
+|---|---|
+| Week 1: deploy skeleton | never built; the service still runs on a laptop behind a tunnel |
+| Week 3–4: single-pass classify, generate, judge | built, then largely replaced |
+| — | **the agentic rewrite**: two specialists with a bounded tool loop, then one agent per changed file |
+| Week 6: eval harness | built in week 6, pointed at the wrong pipeline until much later |
+| Week 7: tuning against eval results | tuning happened against live runs on real pull requests instead |
+| Week 8: deploy | outstanding |
+
+The rewrite came from a measurement: the single-pass reviewer could not
+find a defect whose two ends sat in different files, because the context
+it needed was chosen before anyone knew what the bug was. That is the
+whole argument for the loop, and it is the thing the roadmap did not
+anticipate.
+
+Added along the way and not in the original plan: a linter pass, per-
+repository settings, outcome-driven suppression, and provenance on every
+finding.
 
 ---
 
@@ -2009,18 +2274,36 @@ Document GitHub App credentials and LLM provider API keys as environment variabl
 
 # Traceability Matrix
 
-| Business | Product | Technical | API/Component | Data | Test |
+Each row ties a business need to the requirement, the code that implements
+it and the tests that hold it. "Component" names a module, not an endpoint:
+the service has two routes, and everything else is reached through them.
+
+| Business | Product | Technical | Component | Data | Tests |
 |---|---|---|---|---|---|
-| BR-001 | App installation | TR-001 | GitHub App install flow | installations | TEST-001 |
-| BR-002 | Webhook detection | TR-001 | POST /webhooks/github | webhook_events, reviews | TEST-002/009/011/015 |
-| BR-003 | Diff fetch/parse | TR-002 | Diff Fetcher | reviews | TEST-003/004 |
-| BR-004 | Connected-file context | TR-003 | Context Gatherer | — | — |
-| BR-005 | Finding generation | TR-004/005 | Review Generator | findings | TEST-005 |
-| BR-006 | Judge/grounding pass | TR-006 | Judge Pass | findings | TEST-006 |
-| BR-007 | Confidence/dedup filter | TR-007 | Filter | findings | TEST-007 |
-| BR-008 | Comment posting | TR-008 | Comment Poster | reviews, findings | TEST-008/012/013/014 |
-| BR-009 | Outcome capture | TR-009 | Outcome Tracker | outcomes | — |
-| BR-010 | Evaluation report | TR-010 | GET /eval-report | — | evaluation |
+| BR-001 | App installation | TR-001 | `src/github/auth.py` | installations | `integration/test_github_auth.py` |
+| BR-002 | Webhook detection | TR-001 | `src/webhooks/` | webhook_events, reviews | `database/test_pipeline.py` |
+| BR-003 | Diff fetch and parse | TR-002 | `src/diff/` | reviews | `unit/test_diff*.py` |
+| BR-004 | Connected-file context | TR-003 | `src/context/` | — | `unit/test_languages.py` |
+| BR-005 | Finding generation | TR-004/005 | `src/agents/specialists.py` | findings | `integration/test_specialists.py` |
+| BR-006 | Verification | TR-006 | `src/judge/` | findings | `integration/test_judge.py` |
+| BR-007 | Gates and repeats | TR-007 | `src/filter/` | findings | `unit/test_repeat.py`, `unit/test_candidate_caps.py` |
+| BR-008 | Comment posting | TR-008 | `src/github/review.py` | reviews, findings | `database/test_review_posting.py` |
+| BR-009 | Outcome capture | TR-009 | `src/outcomes/` | outcomes | `database/test_outcomes.py` |
+| BR-010 | Evaluation | TR-010 | `src/evaluation/` | — | `unit/test_eval.py` |
+| BR-011 | Bounded tool loop | TR-011 | `src/agents/loop.py` | — | `integration/test_loop.py` |
+| BR-012 | Token budgets | TR-012 | `src/llm/budget.py` | — | `integration/test_provider.py` |
+| BR-013 | Resume after a restart | TR-013 | `src/recovery.py` | reviews | `database/test_recovery.py` |
+| BR-014 | Retire a superseded review | TR-014 | `src/db/queries.py` | reviews | `database/test_pipeline.py` |
+| BR-015 | Multi-language parsing | TR-015 | `src/context/languages.py` | — | `unit/test_languages.py` |
+| BR-016 | Suppress an ignored category | TR-017 | `src/filter/suppress.py` | outcomes, findings | `database/test_suppression.py` |
+| BR-017 | Per-repository settings | TR-018 | `src/config_file.py` | — | `unit/test_repo_config.py` |
+| BR-018 | Linter pass | TR-019 | `src/analysis/lint.py` | findings | `unit/test_lint.py` |
+| BR-019 | Provenance and cost | TR-020 | `src/db/queries.py` | findings, reviews | `database/test_outcomes.py` |
+| BR-020 | Deployment | TR-016 | — | — | **not built** |
+
+The previous version of this matrix pointed BR-010 at `GET /eval-report`,
+an endpoint that was specified and never written. Rows name modules now,
+so a reader can open the thing being described.
 
 ---
 
@@ -2043,13 +2326,16 @@ Document GitHub App credentials and LLM provider API keys as environment variabl
 2. Why a GitHub App instead of a personal access token?
 3. How does the provider adapter let you swap free-tier LLM providers without rearchitecting?
 4. Why Postgres over a document store here?
-5. Why no agent framework?
+5. Why LangGraph, having first decided against any agent framework? (ADR-011 supersedes ADR-002; the boundary is that LangGraph owns the flow between stages and our code owns everything inside one, including every HTTP call to a model.)
 6. How is the webhook verified?
 7. How is a duplicate webhook delivery handled?
 8. How would you scale this to more repos?
 9. How do you prevent false-positive fatigue?
 10. What does the judge pass actually check?
-11. How is model/prompt version tracked?
+11. How is model/prompt version tracked? (Per finding, with the prompt version hashed from the prompt text so it cannot go stale.)
+12. Why does the linter run a curated rule list rather than a whole ruleset?
+13. How can suppression measure rejection when GitHub never reports one?
+14. Why does an evaluation case allow a defect more than one anchor?
 12. How do you validate structured LLM output?
 13. How do you test the review pipeline?
 14. How do you handle LLM API failure?
@@ -2620,8 +2906,10 @@ correctness problem, not a slow one.
 **How I will handle it.** A scheduled ping to keep it awake, and a scan that
 finds pull requests with no review and picks them up.
 
-**What I will use.** Render's free tier for the service, Neon's free
-PostgreSQL for the database. Neon rather than Render's own free database,
+**What I intended to use, and have not.** Nothing is deployed. The plan
+was Render's free tier for the service and Neon's free PostgreSQL for the
+database — Neon is in use, Render is not. Neon rather than Render's own
+free database,
 because that one deletes itself after thirty days and the project runs eight
 weeks.
 
@@ -2641,7 +2929,7 @@ weeks.
 | `alembic` | Schema changes |
 | `pydantic` | Checking model output has the right shape |
 | `pytest` | Tests |
-| PostgreSQL, Neon, Render | Storage and hosting |
+| PostgreSQL, Neon | Storage (hosting: not built) |
 | A free-tier model provider | The review itself |
 
 ---
@@ -2654,11 +2942,15 @@ touch the network or the development database.
 
 **Not started:** deployment.
 
-**Measured rather than assumed:** three consecutive evaluation runs on
-identical input gave F1 of 74%, 71% and 82%, so at the current sample size of
-four cases anything moving F1 by less than about 15 points is noise. Context
-recall was exactly 50% every run, being the one metric involving no model
-call.
+**Measured rather than assumed:** the flagpole case — Python API and TSX
+dashboard, 16 labelled defects, five deliberately clean sections — scores
+**56% recall, 82% precision, 67% F1** through the agentic pipeline. Five
+live runs on identical input found 6 to 7 defects each, a different subset
+every time, with zero comments on the clean sections across 47 posted.
+
+That spread is the point: at five cases, anything moving F1 by less than
+roughly fifteen points is noise, and several tuning comparisons made
+during development turned out to be measuring exactly that.
 
 **Known gaps, written down rather than hidden:**
 - Connected-file context finds callers of changed functions, not consumers of
@@ -3147,27 +3439,58 @@ switched off one at a time.
 
 **The honest headline:**
 
-> Three consecutive runs on identical input gave F1 of 74%, 71% and 82%. The
-> model is not deterministic even at temperature zero, so at four cases
-> anything moving F1 by less than about 15 points is noise. Context recall was
-> exactly 50% every run, because it involves no model call — which makes it
-> the metric worth tuning against.
+> On the flagpole case — 246 lines, 8 files, Python API and TSX dashboard,
+> 16 labelled defects and five deliberately clean sections — the harness
+> reports **56% recall, 82% precision, 67% F1** through the agentic
+> pipeline.
+>
+> Five live runs on a byte-identical pull request found 6 to 7 of those
+> defects each, a different subset every time, with **zero comments on the
+> five clean sections across 47 posted comments**. Only one defect was
+> found in all five runs.
 
-That variance is the strongest argument for a 50-pull-request benchmark.
+Two things that number depends on, both learned the hard way:
+
+- The harness called the **single-pass** reviewer unconditionally until
+  recently, so every figure it produced described a pipeline the service
+  had stopped using.
+- Scoring allowed a defect only one anchor. A cross-file break has two
+  ends, and counting one of them scored a correct finding as a miss and a
+  false positive at once. Fixing that moved the same run from 35%/67% to
+  56%/82% without touching the reviewer.
+
+The run-to-run variance is the strongest argument for a 50-pull-request
+benchmark. It is also the reason several single-run before-and-after
+comparisons made during tuning proved nothing.
 
 ---
 
 ## Closing — what is not built
 
-- **Deployment.** The only unbuilt feature.
-- **No recovery for interrupted reviews.** The index for the scan exists; the
-  scan does not.
-- **Missed deliveries are invisible.** GitHub does not retry.
-- **No deduplication across re-reviews.** Push twice, comments post twice.
-- **Classification does not chunk**, so a large pull request falls back.
-- **Skip rules miss non-Python files**, wasting tokens.
-- **Thresholds are hand-chosen**, not calibrated.
-- **Python only**, in three files of the context package.
+- **Deployment.** Still the only binary gap: no Dockerfile, no host. It
+  runs on a laptop behind a tunnel.
+- **Missed deliveries are invisible.** GitHub does not retry, and nothing
+  reconciles afterwards.
+- **No chat on the pull request.** Every competitor has it. A developer
+  cannot ask why a comment was made.
+- **No metrics or alerting.** A repeated failure is found by reading the
+  terminal.
+- **Prompt injection inside a tool result.** Nothing separates
+  instructions from data in a file the agent reads. The blast radius is a
+  wrong comment, but the gap is real.
+- **Five evaluation cases.** Too few to separate a real improvement from
+  noise, which the variance above demonstrates rather than asserts.
+- **Thresholds are hand-chosen**, not calibrated — though a repository can
+  now change them in `.pr-review.yml`.
+- **Seven defect classes in the labelled set have never been found by any
+  run**, the most interesting being a ramp marked applied after one step,
+  so the feature silently does nothing. That needs reasoning about
+  behaviour over time rather than spotting a bad line.
+
+Built since an earlier version of this list claimed otherwise: recovery
+for interrupted reviews, deduplication across re-reviews, multi-language
+parsing, outcome-driven suppression, per-repository configuration, a
+linter pass, and provenance on every finding.
 
 Saying these before being asked is stronger than being caught by them. Each
 one is in the HLD with a measurement or a specific pull request behind it.
@@ -3347,18 +3670,23 @@ reduced confidence. Post them as questions instead. A wrong question costs
 nothing; a wrong assertion costs trust. Two lines of prompt, using a
 distinction already built.
 
-### Suppression, closed
+### ~~Suppression~~ — built
 
-`repo_suppressions` is a table nothing reads or writes. Count dismissals per
-repository and category, flip the flag past a threshold, check it in the gate,
-and announce it in the review body. A bot that notices it is being ignored and
-backs off is memorable.
+Done. A category goes quiet for a repository once ten findings in it have
+been posted and fewer than one in five were acted on. The `repo_suppressions`
+table this entry proposed was never the right shape and has been dropped;
+the query runs against `outcomes` and `findings` instead, because GitHub
+never reports a rejection and the denominator has to come from what was
+posted. See US-006.
 
-### Commands and configuration
+### Configuration — built. Commands — not.
 
-`@bot review again`, `@bot explain`, `@bot ignore <category>`, and a
-`.prreview.yml` for thresholds and path excludes. Table stakes for the
-category; their absence is noticed.
+`.pr-review.yml` in the repository under review sets severities, the
+confidence floor, categories to leave alone, and the comment cap.
+
+Commands are still missing: `@bot review again`, `@bot explain`,
+`@bot ignore <category>`. Every competitor has chat on the pull request,
+and its absence is noticed.
 
 ---
 
@@ -3631,6 +3959,8 @@ has no natural stopping point.
 | repeats | before verification | anything posted on an earlier commit |
 | severity | before verification | low severity, which can never post |
 | confidence | after verification | below 0.6, the score the judge just moved |
+| repository settings | after the gates | severities and categories this repository switched off |
+| suppression | after the gates | categories this repository has stopped acting on |
 
 Repeats and severity run first so nothing is ever verified that could not be
 posted. Repeats run *after* the gate rather than before, because a finding
@@ -3661,16 +3991,31 @@ settled:
 - **It predates the token reservation** in `src/llm/budget.py`, which should
   cut the waiting sharply. Re-measure before trusting any of it.
 
-`src/agents/measure.py` exists to produce these numbers but currently
-bypasses the graph, so it undercounts. Fix it before the next measurement.
+`src/agents/measure.py` calls the specialists directly and counts turns.
+It still reports turn-level detail the harness does not, but it is no
+longer where pipeline numbers come from: `src/evaluation/run.py` runs the
+agentic pipeline end to end and reports recall, precision, F1, calls and
+tokens against labelled defects. It called the single-pass reviewer
+unconditionally until recently, which is why every earlier figure
+described a pipeline the service had stopped using.
+
+```bash
+AGENTIC_PIPELINE=1 .venv/bin/python -m src.evaluation.run \
+    --case flagpole-scheduled-rollouts --only H0
+```
 
 ## What is not built
 
 - **A fixer agent.** Suggestions come from the generating model as a
   replacement line, gated at 0.8 confidence and checked by compiling the
-  file. No separate agent writes them.
-- **Suppression.** Learning that a repository dismisses a category and
-  falling silent on it.
+  file. No separate agent writes them, and none will: autofix is out of
+  scope by principle.
+- **A pre-built graph of the repository.** Cross-file questions are
+  answered by an agent choosing to grep at review time. It works — the
+  rename of a key read by two files outside the diff has been caught,
+  naming both — but five runs on identical input caught it in three. An
+  index would make it consistent. That is the clearest architectural gap,
+  and the one too large for the time left.
 
 ## Decisions
 

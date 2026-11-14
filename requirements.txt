@@ -38,3 +38,5 @@ langgraph-checkpoint-postgres==3.2.0
 
 # Tests
 pytest
+ruff>=0.17
+pyyaml

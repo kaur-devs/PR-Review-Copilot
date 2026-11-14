@@ -24,7 +24,9 @@ class GateResult:
         return counts
 
 
-def severity_gate(findings: list[Finding]) -> GateResult:
+def severity_gate(
+    findings: list[Finding], *, postable: frozenset[str] | None = None
+) -> GateResult:
     """Drop what will never be posted, before anything is spent on it.
 
     This half runs *before* verification, because severity is decided by
@@ -37,10 +39,11 @@ def severity_gate(findings: list[Finding]) -> GateResult:
     is what sets the final confidence, so checking it first would throw
     away findings before they have been looked at properly.
     """
+    allowed = POSTABLE_SEVERITIES if postable is None else postable
     result = GateResult()
 
     for finding in findings:
-        if finding.severity not in POSTABLE_SEVERITIES:
+        if finding.severity not in allowed:
             result.hold.append((finding, f"{finding.severity} severity is not posted"))
         else:
             result.post.append(finding)

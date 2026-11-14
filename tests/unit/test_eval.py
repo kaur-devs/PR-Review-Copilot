@@ -3,7 +3,12 @@ from pathlib import Path
 
 from src.context.bundle import ContextBundle, ContextItem
 from src.evaluation.cases import Case, ExpectedFinding, load_cases
-from src.evaluation.score import LINE_WINDOW, RunScore, score_case
+from src.evaluation.score import (
+    LINE_WINDOW,
+    RunScore,
+    _same_place,
+    score_case,
+)
 from src.review.findings import Finding
 
 
@@ -190,3 +195,58 @@ def test_every_ablation_changes_something():
     assert ABLATIONS["H0"].settings == {}
     for name in ("H1", "H2", "H3"):
         assert ABLATIONS[name].settings
+
+
+def a_finding(file: str, line: int) -> Finding:
+    return Finding(
+        file=file, line=line, severity="high", category="correctness",
+        message="m", rationale="r", confidence=0.9,
+    )
+
+
+# ------------------------------------------------- both ends of one defect
+
+def test_a_finding_on_either_end_of_a_cross_file_defect_counts():
+    """The first real run scored 35% recall and 67% precision. Three of
+    the supposed false positives were correct findings anchored at the
+    other end of a defect the ground truth pinned to one side: the
+    unguarded parse reported on the function rather than its caller, the
+    undefined dereference on the component rather than the hook.
+
+    Scoring one anchor only counts a correct finding as a miss and a
+    false positive at once. Re-scored with both ends, the same run was
+    56% recall and 100% precision.
+    """
+    expected = ExpectedFinding(
+        file="backend/app/routers/flags.py",
+        line=107,
+        also=(("backend/app/services/schedule.py", 48),),
+        note="unguarded parse",
+    )
+
+    at_the_caller = a_finding(file="backend/app/routers/flags.py", line=107)
+    at_the_function = a_finding(file="backend/app/services/schedule.py", line=48)
+    somewhere_else = a_finding(file="backend/app/services/segments.py", line=14)
+
+    assert _same_place(expected, at_the_caller)
+    assert _same_place(expected, at_the_function)
+    assert not _same_place(expected, somewhere_else)
+
+
+def test_one_defect_is_claimed_once_however_many_anchors_it_has():
+    """Two comments on the two ends of one defect must not score as two
+    defects found."""
+    case = Case(
+        id="c", repo="o/r", pr=1, installation_id=1,
+        expected=(
+            ExpectedFinding(
+                file="a.py", line=10, also=(("b.py", 20),), note="one defect"
+            ),
+        ),
+    )
+    both_ends = [a_finding(file="a.py", line=10), a_finding(file="b.py", line=20)]
+
+    score = score_case(case, both_ends, ContextBundle())
+
+    assert len(score.matched) == 1
+    assert len(score.extra) == 1, "the second anchor is a duplicate, not a new defect"

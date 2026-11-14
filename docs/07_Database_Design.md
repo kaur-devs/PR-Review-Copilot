@@ -66,6 +66,10 @@ One row per unit of work: one commit on one pull request.
 | `error_code` | varchar(64) | nullable, set when `status = failed` |
 | `context_status` | varchar(16) | nullable — `ok` / `degraded` / `unavailable` |
 | `github_review_id` | bigint | nullable, set once GitHub accepts |
+| `model_calls` | integer | nullable — what the review cost |
+| `prompt_tokens` | integer | nullable |
+| `completion_tokens` | integer | nullable |
+| `seconds` | float | nullable |
 | `created_at` | timestamptz | |
 | `updated_at` | timestamptz | refreshed on every change; finds stuck reviews |
 
@@ -89,8 +93,12 @@ can be retuned without re-running the reviewer (ADR-010).
 | `line` | integer | |
 | `severity` | varchar(32) | |
 | `category` | varchar(64) | |
+| `message` | text | nullable — the sentence the developer actually read |
 | `rationale` | text | |
 | `confidence` | float | |
+| `model` | varchar(128) | nullable — which model produced it |
+| `prompt_version` | varchar(32) | nullable — a hash of the prompt text |
+| `found_by` | varchar(32) | nullable — `wrong`, `robust` or `lint` |
 | `posted` | boolean | |
 | `github_comment_id` | bigint | nullable — how an outcome is matched back |
 
@@ -136,6 +144,7 @@ erDiagram
 | `ix_reviews_status_updated` | the stuck-review recovery scan |
 | `ix_findings_review_id` | a review's findings |
 | `ix_outcomes_repo_category` | acceptance rate per category, per repository |
+| `ix_findings_model_prompt` | what each model and prompt version actually found |
 | `ck_reviews_status` | rejects a status nothing understands |
 | `ck_reviews_context_status` | same, for context quality |
 | `ck_webhook_events_outcome` | same, for delivery outcome |
@@ -163,15 +172,14 @@ which is what lets an outcome be tied back to the finding that produced it.
 
 ## Known gaps
 
-- **The posted message is not reliably stored.** `findings` has `rationale`
-  but no `message` column, and `store_findings` writes
-  `rationale or message`. The sentence a developer actually read cannot
-  always be reconstructed from the database, which weakens the retuning
-  argument that justifies storing held-back findings at all. A `message`
-  column is the fix.
-- **`outcomes` is written but never read.** The acceptance-rate metric and
-  the per-repository suppression it would feed are not built.
-  `ix_outcomes_repo_category` exists for exactly that query.
 - **Development and production share one database.** The test database is
   separate and wiped on every run, which is why `conftest.py` refuses to
   start when `TEST_DATABASE_URL` matches `DATABASE_URL`.
+- **Reviews 1–23 predate the provenance columns** and carry nulls there.
+  Backfilling them with a guess would be worse than leaving them blank,
+  which at least says "we did not record this".
+- **A rejection is never stored.** GitHub reports a thread resolved or
+  unresolved, and nothing else, so `outcomes` only ever holds `accepted`.
+  Suppression works around it by taking the denominator from posted
+  findings rather than from stored outcomes — see the product
+  requirements, US-006.
