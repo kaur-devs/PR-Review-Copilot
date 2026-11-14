@@ -2270,6 +2270,62 @@ Document GitHub App credentials and LLM provider API keys as environment variabl
 
 **Trade-off:** two broad scopes rather than four narrow ones. If measurement later shows one specialist's findings cluster in a sub-area, splitting it is a prompt change, not an architecture change.
 
+## ADR-013 — A Repository Name Index, Built, Measured and Removed
+
+**Context:** the reviewer's hardest defect class is a contract broken
+across files — a response key renamed in Python and still read as a
+property in TypeScript. The two ends share no call, no import and no
+symbol, only a word, and the existing retrieval excluded cross-language
+candidates by design (`same_language` in `src/context/languages.py`). It
+also searched by reading every file in the repository, once per changed
+symbol, on every review: 360,000 file reads and 31 seconds on a repository
+of 14,000 files, recomputed each time and discarded.
+
+**Decision taken:** build a reverse-reference index. Every indexable name
+per file — definitions, calls, property accesses, dictionary keys — stored
+in `symbol_references`, built once per repository, updated by replacing
+the rows for changed files, and queried for the names a diff removed.
+Deliberately not a resolved call graph: nothing claimed that two rows with
+the same name referred to the same thing, because the expensive half of a
+graph is the resolver and it still cannot connect a Python dictionary key
+to the TypeScript property that reads it.
+
+**It worked.** It found a renamed key's two TypeScript consumers at the
+exact lines, across the language boundary, in 50ms. Context recall on the
+evaluation case went from 0% to 50%, the first time that stage had
+contributed anything.
+
+**It did not help.** Six runs of one identical pull request, three with
+and three without:
+
+| | recall | precision | F1 |
+|---|---|---|---|
+| with the index | 38%, 31%, 44% | 86% | 52% |
+| without it | 50%, 44%, 38% | 82% | 57% |
+
+**Why.** The defect was already being found without it. `src/agents/prompts.py`
+tells the specialist that the other end of a renamed contract is "often
+not even in the same language" and to "grep for the OLD name across the
+whole repository, frontend included"; the `grep` tool reads every file
+and filters by nothing. The index handed an agent something it already
+had, and the context cost it attention on every turn, because a prompt is
+resent in full on each turn of a tool loop.
+
+**Decision:** removed, in migration `d1f3a07c45b2`. Kept in git rather
+than in the schema; `git revert` restores it if a repository large enough
+to make the latency case arrives.
+
+**Kept from the work:** `ContextItem.source_file`, and `_context_block`
+finally using the `files` argument it had accepted and ignored since
+before the per-file fan-out existed. Every agent had been receiving
+context gathered for every other agent's file.
+
+**Trade-off:** a day spent to learn that retrieval was not the
+bottleneck. The cheaper experiment — hand the agents the files by hand
+and see whether detection improves — would have said the same thing in an
+afternoon, and is the one to run first next time a retrieval idea looks
+obvious.
+
 ---
 
 # Traceability Matrix

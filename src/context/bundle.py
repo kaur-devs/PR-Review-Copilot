@@ -34,6 +34,11 @@ class ContextItem:
     changed_symbol: str
     reference_lines: tuple[int, ...]
 
+    # Which changed file this was found on behalf of. One agent reviews
+    # one file now, so context gathered for a different file is text it
+    # reads, carries on every turn, and cannot use.
+    source_file: str = ""
+
     @property
     def cost(self) -> int:
         return len(self.snippet)
@@ -149,6 +154,7 @@ def assemble(
                 confidence=best.confidence,
                 changed_symbol=symbol_name,
                 reference_lines=tuple(lines),
+                source_file=best.symbol.file,
             )
         )
 

@@ -99,7 +99,23 @@ def _diff_block(diff: FileDiff) -> str:
 
 
 def _context_block(context: ContextBundle, files: set[str]) -> str:
-    relevant = [item for item in context.items if item.changed_symbol]
+    """The connected code worth showing an agent reviewing these files.
+
+    `files` was accepted and ignored here for as long as one agent
+    reviewed the whole pull request, when showing it everything was
+    right. The per-file fan-out made that wrong without changing this
+    function: every agent then received context gathered for every other
+    agent's file, read it, and carried it on every turn.
+
+    An item with no source file recorded is shown regardless, so older
+    context that predates the field is never silently dropped.
+    """
+    relevant = [
+        item
+        for item in context.items
+        if item.changed_symbol
+        and (not item.source_file or item.source_file in files)
+    ]
     if not relevant:
         return ""
 

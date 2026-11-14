@@ -1,0 +1,43 @@
+{
+  "runs": [
+    {
+      "label": "H4 without the name index",
+      "recall": 0.5,
+      "precision": 0.8,
+      "f1": 0.6153846153846154,
+      "context_recall": 0.0,
+      "model_calls": 111,
+      "errors": 0,
+      "cases": [
+        {
+          "id": "flagpole-scheduled-rollouts",
+          "matched": 8,
+          "missed": [
+            "backend/app/services/segments.py:14 (X3 any() where the docstring and the README both say all)",
+            "backend/app/routers/flags.py:101 (S2 looked up by key alone, never scoped to the project)",
+            "backend/app/services/schedule.py:40 (C1/C2 the ramp applies once and compounds from the live value, so ramp_minutes never ramps)",
+            "backend/app/services/schedule.py:27 (C4 changes applied in arbitrary order, no ORDER BY apply_at)",
+            "frontend/src/api.ts:72 (C6 scheduleChange omits adminHeaders(); createFlag includes it)",
+            "backend/app/routers/flags.py:118 (CC1 apply_due_changes reads then writes with no locking)",
+            "backend/app/routers/evaluate.py:42 (P1 segment query inside the per-flag loop, N+1 on the hot path)",
+            "frontend/src/components/ScheduleBadge.tsx:28 (M2 array index as a React key on a sorted, filtered list)"
+          ],
+          "extra": [
+            "frontend/src/hooks/useSchedule.ts:17 Non-null assertion on possibly empty schedule list can cause a runtime crash",
+            "frontend/src/hooks/useSchedule.ts:9 Promise from listSchedules is not caught, leaving errors unhandled and loading state never cleared"
+          ],
+          "context_found": [],
+          "context_missed": [
+            "frontend/src/types.ts",
+            "frontend/src/components/FlagRow.tsx",
+            "backend/app/services/segments.py",
+            "backend/app/auth.py"
+          ],
+          "model_calls": 111,
+          "seconds": 48.3,
+          "error": null
+        }
+      ]
+    }
+  ]
+}

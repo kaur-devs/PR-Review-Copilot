@@ -1,0 +1,47 @@
+{
+  "runs": [
+    {
+      "label": "H0 full pipeline",
+      "recall": 0.3125,
+      "precision": 0.7142857142857143,
+      "f1": 0.43478260869565216,
+      "context_recall": 0.5,
+      "model_calls": 102,
+      "errors": 0,
+      "cases": [
+        {
+          "id": "flagpole-scheduled-rollouts",
+          "matched": 5,
+          "missed": [
+            "backend/app/routers/flags.py:93 (S1 schedule_change has no require_admin; its two siblings do)",
+            "backend/app/routers/flags.py:101 (S2 looked up by key alone, never scoped to the project)",
+            "backend/app/services/schedule.py:40 (C1/C2 the ramp applies once and compounds from the live value, so ramp_minutes never ramps)",
+            "backend/app/services/schedule.py:21 (C3 int(elapsed) truncates, nothing moves in the first minute)",
+            "backend/app/services/schedule.py:27 (C4 changes applied in arbitrary order, no ORDER BY apply_at)",
+            "frontend/src/hooks/useSchedule.ts:17 (C5 [0]! asserts non-null on a filtered array that can be empty)",
+            "frontend/src/api.ts:72 (C6 scheduleChange omits adminHeaders(); createFlag includes it)",
+            "backend/app/routers/flags.py:118 (CC1 apply_due_changes reads then writes with no locking)",
+            "backend/app/routers/evaluate.py:42 (P1 segment query inside the per-flag loop, N+1 on the hot path)",
+            "frontend/src/api.ts:85 (M1 as any reads a field types.ts does not declare)",
+            "frontend/src/components/ScheduleBadge.tsx:28 (M2 array index as a React key on a sorted, filtered list)"
+          ],
+          "extra": [
+            "frontend/src/api.ts:63 scheduleChange expects a Schedule with ramp_to and ramp_minutes but backend returns only id and apply_at",
+            "frontend/src/api.ts:79 listSchedules returns schedules from flag JSON, but backend flag representation does not include a schedules field"
+          ],
+          "context_found": [
+            "frontend/src/types.ts",
+            "frontend/src/components/FlagRow.tsx"
+          ],
+          "context_missed": [
+            "backend/app/services/segments.py",
+            "backend/app/auth.py"
+          ],
+          "model_calls": 102,
+          "seconds": 133.4,
+          "error": null
+        }
+      ]
+    }
+  ]
+}

@@ -479,3 +479,49 @@ def test_the_last_call_asks_for_everything_not_the_worst_thing():
     from src.agents.loop import LAST_CALL
 
     assert "List every problem you found, not only the most serious one" in LAST_CALL
+
+
+# ------------------------------------------- context goes where it is wanted
+
+def a_context_item(source_file: str, file: str = "app/orders.py"):
+    from src.context.bundle import ContextItem
+
+    return ContextItem(
+        file=file, start_line=1, end_line=3,
+        snippet="    1 charge(10)", relation="calls it",
+        discovery="call_site_only", confidence=0.9,
+        changed_symbol="charge", reference_lines=(1,),
+        source_file=source_file,
+    )
+
+
+async def test_an_agent_only_sees_context_gathered_for_its_own_file(box):
+    """`files` was accepted and ignored here for as long as one agent
+    reviewed the whole pull request. The per-file fan-out made that wrong
+    without changing the function: every agent then received context
+    gathered for every other agent's file, read it, and carried it on
+    every turn."""
+    context = ContextBundle(items=[
+        a_context_item(source_file=BILLING),
+        a_context_item(source_file="app/unrelated.py", file="app/elsewhere.py"),
+    ])
+    client, sent = answers(json.dumps({"findings": []}), json.dumps({"findings": []}))
+
+    async with LLMProvider(api_key="k", client=client) as model:
+        await review(model, box, a_diff(), context)
+
+    prompt = sent[0]["messages"][1]["content"]
+    assert "app/orders.py" in prompt, "context for this agent's file is shown"
+    assert "app/elsewhere.py" not in prompt, "context for another file is not"
+
+
+async def test_context_with_no_source_file_recorded_is_still_shown(box):
+    """Older context predates the field. Dropping it silently would be a
+    worse failure than showing a little too much."""
+    context = ContextBundle(items=[a_context_item(source_file="")])
+    client, sent = answers(json.dumps({"findings": []}), json.dumps({"findings": []}))
+
+    async with LLMProvider(api_key="k", client=client) as model:
+        await review(model, box, a_diff(), context)
+
+    assert "app/orders.py" in sent[0]["messages"][1]["content"]

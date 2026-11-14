@@ -14,9 +14,6 @@ from src.config_file import RepoConfig
 from src.config_file import load as load_repo_config
 from src.common import trace
 from src.context.gather import gather_context
-from src.db.queries import ensure_repo
-from src.db.session import get_session_factory
-from src.index.retrieve import candidates_for, ensure_indexed
 from src.context.snapshot import (
     SnapshotTooLarge,
     SnapshotUnavailable,
@@ -50,42 +47,6 @@ def graph():
     if _graph is None:
         _graph = compile_graph()
     return _graph
-
-
-async def _index_candidates(event, snapshot, diffs) -> list:
-    """What else in the repository still says a name this change removed.
-
-    Its own session, and its own try: the name index is an improvement to
-    retrieval, not a thing a review should fail over. A repository being
-    indexed for the first time pays for it once; afterwards only the
-    changed files are re-read.
-    """
-    if not diffs:
-        return []
-
-    try:
-        async with get_session_factory()() as session:
-            repo_id = await ensure_repo(session, event)
-            await ensure_indexed(
-                session, repo_id, snapshot, event.head_sha,
-                [diff.filename for diff in diffs],
-            )
-            found = await candidates_for(session, repo_id, snapshot, diffs)
-    except Exception:
-        logger.exception("the name index failed, reviewing without it")
-        return []
-
-    if found:
-        trace.section(
-            "NAME INDEX",
-            f"{len(found)} file(s) still mention a name this change removed",
-        )
-        for item in found:
-            trace.item(
-                f"{item.file}:{item.reference_lines[0]}  "
-                f"{item.changed_symbol} ({item.confidence})"
-            )
-    return found
 
 
 def thread_id(event: PullRequestEvent) -> str:
@@ -136,9 +97,6 @@ async def review_pull_request_with_agents(
             outcome.context = await gather_context(
                 event.repo_full_name, event.head_sha, event.installation_id,
                 outcome.diffs, snapshot=snapshot,
-            )
-            outcome.context.items.extend(
-                await _index_candidates(event, snapshot, outcome.diffs)
             )
             settings = load_repo_config(snapshot.root)
             if settings != RepoConfig():

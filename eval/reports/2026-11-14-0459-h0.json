@@ -1,0 +1,44 @@
+{
+  "runs": [
+    {
+      "label": "H0 full pipeline",
+      "recall": 0.375,
+      "precision": 0.8571428571428571,
+      "f1": 0.5217391304347825,
+      "context_recall": 0.0,
+      "model_calls": 90,
+      "errors": 0,
+      "cases": [
+        {
+          "id": "flagpole-scheduled-rollouts",
+          "matched": 6,
+          "missed": [
+            "backend/app/routers/flags.py:29 (X1 rollout_percent renamed to rollout; types.ts and FlagRow.tsx are not in the diff)",
+            "backend/app/routers/flags.py:93 (S1 schedule_change has no require_admin; its two siblings do)",
+            "backend/app/routers/flags.py:101 (S2 looked up by key alone, never scoped to the project)",
+            "backend/app/services/schedule.py:40 (C1/C2 the ramp applies once and compounds from the live value, so ramp_minutes never ramps)",
+            "backend/app/services/schedule.py:27 (C4 changes applied in arbitrary order, no ORDER BY apply_at)",
+            "frontend/src/api.ts:72 (C6 scheduleChange omits adminHeaders(); createFlag includes it)",
+            "backend/app/routers/flags.py:118 (CC1 apply_due_changes reads then writes with no locking)",
+            "backend/app/routers/evaluate.py:42 (P1 segment query inside the per-flag loop, N+1 on the hot path)",
+            "frontend/src/api.ts:85 (M1 as any reads a field types.ts does not declare)",
+            "frontend/src/components/ScheduleBadge.tsx:28 (M2 array index as a React key on a sorted, filtered list)"
+          ],
+          "extra": [
+            "frontend/src/hooks/useSchedule.ts:9 Promise rejection from listSchedules is not caught, leading to unhandled rejection and loading state never cleared on error"
+          ],
+          "context_found": [],
+          "context_missed": [
+            "frontend/src/types.ts",
+            "frontend/src/components/FlagRow.tsx",
+            "backend/app/services/segments.py",
+            "backend/app/auth.py"
+          ],
+          "model_calls": 90,
+          "seconds": 492.1,
+          "error": null
+        }
+      ]
+    }
+  ]
+}
