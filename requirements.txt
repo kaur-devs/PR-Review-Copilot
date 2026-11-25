@@ -1,34 +1,45 @@
-# Install with:  .venv/bin/pip install -r requirements.txt
-# Versions are left open while the project is moving. Pin them with
-# "pip freeze" before deploying.
+# The packages this project chose, and why. Install with:
+#     .venv/bin/pip install -r requirements.txt
+#
+# Versions are pinned so a build in three months installs what the tests
+# passed against, rather than whatever was newest that day.
+#
+# This file lists only the ~18 direct dependencies, because its job is to
+# explain them. Installing them pulls in about 50 more, and those can break
+# a build just as easily, so the full set is frozen in requirements.lock.txt
+# and that is the file the Dockerfile installs. Regenerate it with:
+#     .venv/bin/pip freeze > requirements.lock.txt
+# Change a version here, install, then regenerate the lock file.
 
 # Web service
-fastapi
-uvicorn[standard]
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
 
 # Reads settings out of the .env file
-python-dotenv
+python-dotenv==1.2.3
 
 # Database: SQLAlchemy talks to it, asyncpg is the driver, alembic handles
 # schema changes
-sqlalchemy[asyncio]
-asyncpg
-alembic
+sqlalchemy[asyncio]==2.0.54
+asyncpg==0.31.0
+alembic==1.20.0
 
-# Proves who we are to GitHub (signs a JSON Web Token with our private key)
-pyjwt[crypto]
+# Proves who we are to GitHub (signs a JSON Web Token with our private key).
+# The [crypto] extra is what brings in cryptography, which src/config.py also
+# uses to reject an unreadable private key at startup.
+pyjwt[crypto]==2.15.0
 
 # Makes HTTP calls to GitHub's API
-httpx
+httpx==0.28.1
 
 # Reads unified diffs
-unidiff
+unidiff==1.0.1
 
 # Parses source code so we can find which function changed
-tree-sitter
-tree-sitter-python
-tree-sitter-javascript
-tree-sitter-typescript
+tree-sitter==0.26.0
+tree-sitter-python==0.25.0
+tree-sitter-javascript==0.25.0
+tree-sitter-typescript==0.23.2
 
 # Orchestrates the agentic review as a checkpointed state graph.
 # Pinned exactly: graphs are reported to break across minor releases, and
@@ -36,7 +47,19 @@ tree-sitter-typescript
 langgraph==1.2.20
 langgraph-checkpoint-postgres==3.2.0
 
+# Per-repository settings file (.pr-review.yml)
+pyyaml==6.0.3
+
+# NOT a development tool. src/analysis/lint.py shells out to ruff during
+# every review: it is where the ASYNC and E711 findings come from, the half
+# of the reviewer that costs no tokens. src/analysis/lint.py looks for
+# .venv/bin/ruff and then falls back to PATH, and if it finds neither it
+# returns no findings AND LOGS NOTHING. So a deployment without ruff loses
+# those findings silently. It must stay in the production image.
+ruff==0.17.5
+
 # Tests
-pytest
-ruff>=0.17
-pyyaml
+pytest==9.1.1
+# pytest.ini sets asyncio_mode = auto, which is this package's setting. The
+# suite cannot run without it.
+pytest-asyncio==1.4.0
