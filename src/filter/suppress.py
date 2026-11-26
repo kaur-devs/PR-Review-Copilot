@@ -16,6 +16,14 @@ resolved rarely is a category nobody is acting on.
 It is deliberately slow to act. Nothing is suppressed until a repository
 has posted a real number of findings in a category, because two ignored
 comments is a quiet week, not a verdict.
+
+And nothing is suppressed at all until the repository has resolved at
+least one thread somewhere. A rate of zero resolutions can mean the team
+disagrees with us, or it can mean the team does not use GitHub's resolve
+button; the two are indistinguishable from here. They are not equally
+costly to get wrong. A comment posted wrongly is dismissed in a second,
+while a finding withheld wrongly is a defect that ships, so an ambiguous
+signal should leave us speaking rather than silent.
 """
 
 from __future__ import annotations
@@ -34,6 +42,12 @@ MINIMUM_POSTED = 10
 
 # Resolve rate under this, with enough evidence, means stop saying it.
 ACCEPTANCE_FLOOR = 0.2
+
+# How many resolved threads a repository must have, across every category,
+# before its silence counts as evidence of anything. Deliberately the
+# weakest possible form of the guard: one resolution anywhere is enough to
+# show the habit exists. Raise it to demand more before falling silent.
+MINIMUM_OUTCOMES = 1
 
 
 async def acceptance_by_category(
@@ -59,6 +73,15 @@ async def acceptance_by_category(
     }
 
 
+async def outcomes_recorded(session: AsyncSession, repo_id: int) -> int:
+    """How many threads anyone in this repository has ever resolved."""
+    return (
+        await session.execute(
+            select(func.count()).select_from(Outcome).where(Outcome.repo_id == repo_id)
+        )
+    ).scalar_one()
+
+
 async def suppressed_categories(
     session: AsyncSession, repo_id: int
 ) -> dict[str, str]:
@@ -67,6 +90,16 @@ async def suppressed_categories(
     Returns the reason alongside each, because a reviewer that goes quiet
     without being able to say why is indistinguishable from a broken one.
     """
+    resolved_anywhere = await outcomes_recorded(session, repo_id)
+    if resolved_anywhere < MINIMUM_OUTCOMES:
+        logger.info(
+            "suppressing nothing in repo %s: %s threads resolved in total, so "
+            "an acceptance rate here would be measuring our own silence",
+            repo_id,
+            resolved_anywhere,
+        )
+        return {}
+
     quiet: dict[str, str] = {}
 
     for category, (posted, resolved) in (

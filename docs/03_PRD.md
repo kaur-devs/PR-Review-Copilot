@@ -114,6 +114,15 @@ denominator is therefore every finding posted in that category and the
 numerator is the ones somebody resolved. A suppressed finding is held, not
 deleted, so lowering the threshold recovers it without re-reviewing.
 
+Nothing is suppressed at all until the repository has resolved at least one
+thread, anywhere. Zero resolutions can mean the team disagrees with us or
+that it does not use GitHub's resolve button, and nothing in the data tells
+those apart. The errors are not equally costly: a comment posted wrongly is
+dismissed in a second, while a finding withheld wrongly is a defect that
+ships. An unreadable signal therefore leaves the reviewer speaking. This was
+found in a live pull request where two genuine defects were caught, stored,
+and never mentioned, because the repository had never resolved a thread.
+
 It will still say nothing until a repository has real history, which is
 correct rather than a limitation.
 

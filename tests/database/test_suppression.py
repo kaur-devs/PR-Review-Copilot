@@ -16,6 +16,7 @@ from src.db.queries import claim_review, ensure_repo, store_findings
 from src.db.session import get_session_factory
 from src.filter.suppress import (
     ACCEPTANCE_FLOOR,
+    MINIMUM_OUTCOMES,
     MINIMUM_POSTED,
     apply,
     suppressed_categories,
@@ -92,13 +93,52 @@ async def test_two_ignored_comments_is_a_quiet_week_not_a_verdict():
 async def test_the_denominator_is_what_was_posted_not_what_was_stored():
     """GitHub has no "this was wrong" event, so a rejection is never
     written down. Counting only stored outcomes would make every
-    acceptance rate 100% and nothing would ever be suppressed."""
-    repo_id = await seed("performance", posted=MINIMUM_POSTED + 5, resolved=0)
+    acceptance rate 100% and nothing would ever be suppressed.
+
+    One resolution out of fifteen is 7%, under the floor. Were the
+    denominator the stored outcomes instead, the same history would read
+    as one out of one and nothing would ever go quiet.
+    """
+    repo_id = await seed("performance", posted=MINIMUM_POSTED + 5, resolved=1)
 
     async with get_session_factory()() as session:
         quiet = await suppressed_categories(session, repo_id)
 
-    assert "performance" in quiet, "no outcomes at all is the strongest signal"
+    assert "performance" in quiet
+    assert "1 of 15" in quiet["performance"]
+
+
+async def test_a_repository_that_resolves_nothing_is_not_evidence():
+    """Silence everywhere is an absent signal, not a negative one.
+
+    This is the case that caught a real pull request: a repository with
+    nineteen posted correctness findings and no resolutions anywhere had
+    the category muted, so two genuine defects were found, stored, and
+    never mentioned. Zero resolutions can mean the team disagrees with
+    us or that it does not use the resolve button, and nothing here can
+    tell those apart. The errors are not symmetrical — a wrong comment
+    is dismissed, a withheld defect ships — so an unreadable signal
+    leaves us speaking.
+    """
+    repo_id = await seed("correctness", posted=MINIMUM_POSTED + 9, resolved=0)
+
+    async with get_session_factory()() as session:
+        assert await suppressed_categories(session, repo_id) == {}
+
+
+async def test_one_resolution_anywhere_is_enough_to_start_listening():
+    """The guard is a floor on evidence, not a second acceptance rate.
+
+    A single resolved thread shows the habit exists; from then on the
+    acceptance rate speaks for itself, including for categories that
+    have never had one resolved.
+    """
+    assert MINIMUM_OUTCOMES == 1, "this test describes the floor it is set to"
+
+    repo_id = await seed("maintainability", posted=MINIMUM_POSTED + 2, resolved=1)
+
+    async with get_session_factory()() as session:
+        assert "maintainability" in await suppressed_categories(session, repo_id)
 
 
 def test_a_suppressed_finding_is_held_not_deleted():
