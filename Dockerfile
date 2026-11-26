@@ -22,6 +22,7 @@ COPY --from=builder /opt/venv /opt/venv
 
 WORKDIR /app
 COPY src/ ./src/
+COPY static/ ./static/
 COPY alembic/ ./alembic/
 COPY alembic.ini ./
 

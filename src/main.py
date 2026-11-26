@@ -3,7 +3,10 @@
 from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from src.config import get_settings
 from src.recovery import start_recovery
 from src.webhooks.router import router as webhook_router
@@ -58,6 +61,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="PR Review Copilot", version="0.1.0", lifespan=lifespan)
 app.include_router(webhook_router)
+
+
+# Beside src/, so it resolves the same from the repo root and from /app.
+LANDING_PAGE = Path(__file__).resolve().parent.parent / "static" / "index.html"
+
+
+@app.get("/", include_in_schema=False)
+async def home() -> FileResponse:
+    """The page a person gets. Everything else here is for machines."""
+    return FileResponse(LANDING_PAGE)
 
 
 @app.get("/health")

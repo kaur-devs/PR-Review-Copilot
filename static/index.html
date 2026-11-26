@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PR Review Copilot</title>
+<meta name="description" content="An installable GitHub App that reviews pull requests and posts inline findings.">
+<style>
+  :root {
+    --bg: #0b0c0e;
+    --panel: #131519;
+    --line: #23262c;
+    --ink: #e6e8eb;
+    --muted: #8b9199;
+    --dim: #5f666e;
+    --accent: #f0b429;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--sans); font-size: 16px; line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 0 16px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header { border-bottom: 1px solid var(--line); }
+  header .wrap { display: flex; align-items: center; gap: 20px; height: 60px; }
+  .logo { font-family: var(--mono); font-weight: 600; letter-spacing: -0.3px; }
+  .logo b { color: var(--accent); }
+  header nav { margin-left: auto; display: flex; gap: 20px; font-size: 14px; }
+  header nav a { color: var(--muted); }
+
+  .hero { padding: 72px 0 8px; }
+  h1 {
+    font-family: var(--mono); font-size: clamp(28px, 5.2vw, 42px);
+    line-height: 1.15; letter-spacing: -1px; margin: 0 0 18px; font-weight: 600;
+  }
+  .lede { color: var(--muted); font-size: 18px; max-width: 60ch; margin: 0 0 28px; }
+  .lede strong { color: var(--ink); font-weight: 500; }
+
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
+  .btn {
+    display: inline-block; padding: 11px 20px; border-radius: 7px;
+    font-size: 15px; font-weight: 500; border: 1px solid transparent;
+  }
+  .btn-primary { background: var(--accent); color: #1a1205; }
+  .btn-primary:hover { background: #ffc53d; text-decoration: none; }
+  .btn-ghost { border-color: var(--line); color: var(--ink); }
+  .btn-ghost:hover { border-color: var(--dim); text-decoration: none; }
+  .note { font-size: 13px; color: var(--dim); margin: 0 0 56px; }
+
+  section { padding: 56px 0; border-top: 1px solid var(--line); }
+  h2 {
+    font-family: var(--mono); font-size: 13px; text-transform: uppercase;
+    letter-spacing: 1.4px; color: var(--dim); font-weight: 600; margin: 0 0 22px;
+  }
+  h3 { font-size: 17px; margin: 0 0 8px; font-weight: 600; }
+  p { margin: 0 0 16px; color: var(--muted); }
+  p.tight { margin-bottom: 0; }
+
+  /* the real review */
+  .review { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .review-head {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: 13px;
+  }
+  .bot {
+    width: 20px; height: 20px; border-radius: 4px; background: var(--accent);
+    display: grid; place-items: center; font-size: 11px; color: #1a1205; font-weight: 700;
+  }
+  .review-head .who { font-weight: 600; }
+  .review-head .when { color: var(--dim); }
+  .review-head .link { margin-left: auto; }
+  .c { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .c:last-child { border-bottom: 0; }
+  .loc { font-family: var(--mono); font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
+  .loc b { color: var(--ink); font-weight: 500; }
+  .msg { font-size: 14.5px; margin-bottom: 6px; }
+  .why { font-size: 13px; color: var(--dim); font-family: var(--mono); line-height: 1.5; }
+  .tag {
+    display: inline-block; font-family: var(--mono); font-size: 10.5px;
+    padding: 2px 7px; border-radius: 20px; border: 1px solid var(--line);
+    color: var(--muted); margin-left: 8px; vertical-align: 1.5px; letter-spacing: 0.4px;
+  }
+  .tag.lint { border-color: #2d4a36; color: #71c491; }
+  .tag.agent { border-color: #3a3356; color: #a893e0; }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line);
+           border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .stat { background: var(--panel); padding: 20px 16px; text-align: center; }
+  .stat .n { font-family: var(--mono); font-size: 26px; color: var(--accent); letter-spacing: -1px; }
+  .stat .k { font-size: 12px; color: var(--dim); margin-top: 2px; }
+
+  .halves { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .half { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+
+  .flow { font-family: var(--mono); font-size: 13px; color: var(--muted);
+          background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+          padding: 18px; overflow-x: auto; white-space: pre; line-height: 1.8; }
+  .flow b { color: var(--accent); font-weight: 400; }
+
+  ul { margin: 0; padding-left: 20px; color: var(--muted); }
+  li { margin-bottom: 8px; }
+  li b { color: var(--ink); font-weight: 500; }
+
+  footer { border-top: 1px solid var(--line); padding: 28px 0 56px; font-size: 13px; color: var(--dim); }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; }
+  footer .sp { margin-left: auto; }
+
+  @media (max-width: 640px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .halves { grid-template-columns: 1fr; }
+    .hero { padding-top: 48px; }
+    header nav a:not(:last-child) { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <span class="logo">PR Review <b>Copilot</b></span>
+    <nav>
+      <a href="#review">The output</a>
+      <a href="#how">How it works</a>
+      <a href="#limits">Limits</a>
+      <a href="https://github.com/kaur-devs/PR-Review-Copilot">Source</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="hero">
+    <h1>Reviews your pull requests.<br>Posts inline findings.</h1>
+    <p class="lede">An installable GitHub App. Half the findings come from a linter and
+      cost nothing; the other half come from agents that read the surrounding code before
+      they say anything. <strong>Both halves have to survive a judge before a comment is posted.</strong></p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/apps/pr-review-copilot-kaur-devs/installations/new">Install on GitHub</a>
+      <a class="btn btn-ghost" href="https://github.com/kaur-devs/PR-Review-Copilot">Read the source</a>
+    </div>
+    <p class="note">Free. Pick the repositories it can see; it only reads pull requests you open after that.</p>
+  </div>
+
+  <section id="review" style="border-top:0; padding-top:0;">
+    <h2>What it actually said, on a real pull request</h2>
+    <div class="review">
+      <div class="review-head">
+        <span class="bot">PR</span>
+        <span class="who">PR Review Copilot</span>
+        <span class="when">reviewed 1 file &middot; 19.0s</span>
+        <a class="link" href="https://github.com/kaur-devs/PR-Review-Testing-/pull/7">view on GitHub &rarr;</a>
+      </div>
+
+      <div class="c">
+        <div class="loc"><b>backend/app/services/quota.py</b>:8</div>
+        <div class="msg">Comparison to <code>None</code> should be <code>cond is None</code><span class="tag lint">ruff</span></div>
+        <div class="why">ruff E711, on a line this pull request changed</div>
+      </div>
+
+      <div class="c">
+        <div class="loc"><b>backend/app/services/quota.py</b>:13</div>
+        <div class="msg">Mutable default argument 'seen' leads to shared state across calls<span class="tag agent">agent</span></div>
+        <div class="why">record_evaluation defined on line 13 uses seen: list = [] which is evaluated
+          once at import time, causing all calls to share the same list</div>
+      </div>
+
+      <div class="c">
+        <div class="loc"><b>backend/app/services/quota.py</b>:21</div>
+        <div class="msg">Async functions should not call <code>time.sleep</code><span class="tag lint">ruff</span></div>
+        <div class="why">ruff ASYNC251, on a line this pull request changed</div>
+      </div>
+
+      <div class="c">
+        <div class="loc"><b>backend/app/services/quota.py</b>:21</div>
+        <div class="msg">Blocking call time.sleep used in async function<span class="tag agent">agent</span></div>
+        <div class="why">wait_for_window is async but calls time.sleep, blocking the event loop instead of awaiting</div>
+      </div>
+    </div>
+    <p class="note" style="margin-top:14px">Verbatim, from the run on 26 November 2026. The pull request is public &mdash; go and check it.</p>
+  </section>
+
+  <section>
+    <h2>Measured, not claimed</h2>
+    <div class="stats">
+      <div class="stat"><div class="n">19.0s</div><div class="k">per review</div></div>
+      <div class="stat"><div class="n">2</div><div class="k">independent reviewers</div></div>
+      <div class="stat"><div class="n">9</div><div class="k">pipeline stages</div></div>
+      <div class="stat"><div class="n">693</div><div class="k">tests passing</div></div>
+    </div>
+  </section>
+
+  <section id="how">
+    <h2>How it works</h2>
+    <div class="halves">
+      <div class="half">
+        <h3>The cheap half</h3>
+        <p class="tight">A curated set of linter rules chosen by what they cost, not by how
+          many they catch. Deterministic, instant, and free &mdash; so the model's budget is
+          spent only on the judgements a model is needed for.</p>
+      </div>
+      <div class="half">
+        <h3>The expensive half</h3>
+        <p class="tight">Agents that pull in the definitions and callers around a change
+          before deciding anything. Each candidate is then re-checked by a separate judge
+          with no memory of the agent that proposed it.</p>
+      </div>
+    </div>
+    <div class="flow" style="margin-top:20px">webhook → snapshot → diff → context ─┬─ <b>lint</b> ───┐
+                                     │          ├─→ judge → gate → post
+                                     └─ <b>agents</b> ─┘</div>
+    <p class="note" style="margin-top:14px">A finding is dropped if the judge cannot confirm it, if the
+      severity is too low to be worth a comment, or if this repository has shown it does not act on that kind of finding.</p>
+  </section>
+
+  <section id="limits">
+    <h2>What it does not do</h2>
+    <ul>
+      <li><b>Python, JavaScript and TypeScript only.</b> Other files in a pull request are skipped, not guessed at.</li>
+      <li><b>One instance, free tier.</b> Reviews run one at a time, and a webhook arriving during a restart is lost rather than queued.</li>
+      <li><b>It does not resume mid-review.</b> An interrupted review restarts from the beginning on the next boot.</li>
+      <li><b>It is not a merge gate.</b> It comments; it never approves, blocks or pushes code.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Install it</h2>
+    <p>Pick the repositories it can see. Open a pull request. It comments within about half a minute.</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/apps/pr-review-copilot-kaur-devs/installations/new">Install on GitHub</a>
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    <span>Built by <a href="https://github.com/kaur-devs">kaur-devs</a></span>
+    <span class="sp"><a href="https://github.com/kaur-devs/PR-Review-Copilot">Source</a></span>
+    <span><a href="/health">Status</a></span>
+    <span><a href="/docs">API</a></span>
+  </div>
+</footer>
+
+</body>
+</html>
