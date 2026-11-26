@@ -17,6 +17,26 @@ logging.basicConfig(
 # httpx logs every request at INFO, which drowns out our own lines.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
+
+class HealthCheckFilter(logging.Filter):
+    """Drop the access-log line for /health, and nothing else.
+
+    The keep-alive pinger asks for /health every five minutes, so without
+    this the log is twelve lines an hour of nothing, and the lines that
+    matter fall out of the host's short retention. This is on the access
+    logger alone: errors, tracebacks and our own logging are untouched, so
+    a real problem cannot hide behind it.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        return not (
+            isinstance(args, tuple) and len(args) >= 3 and args[2] == "/health"
+        )
+
+
+logging.getLogger("uvicorn.access").addFilter(HealthCheckFilter())
+
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager
